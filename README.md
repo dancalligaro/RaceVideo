@@ -22,3 +22,9 @@ ctest --preset debug
 The project follows the Google C++ style, uses Abseil status-based error
 handling, and compiles application targets with C++ exceptions disabled.
 
+## Current milestone
+
+The CLI validates its input and scans the MP4 box hierarchy for the `gpmd`
+sample description that identifies a GoPro GPMF telemetry track. Telemetry is
+modeled as independent, timestamped sensor streams because GPS and inertial
+sensors run at different rates.

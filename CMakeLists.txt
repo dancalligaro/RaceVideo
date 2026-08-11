@@ -22,11 +22,14 @@ add_library(racevideo_core
   src/cli/options.cc
   src/cli/options.h
   src/common/run.cc
-  src/common/run.h)
+  src/common/run.h
+  src/parser/mp4_gpmf.cc
+  src/parser/mp4_gpmf.h
+  src/telemetry/telemetry.h)
 target_link_libraries(
   racevideo_core
   PUBLIC racevideo_options absl::flags absl::flags_parse absl::status
-         absl::statusor absl::strings)
+         absl::statusor absl::strings absl::time)
 target_include_directories(racevideo_core PUBLIC src)
 
 add_executable(racevideo src/cli/main.cc)
@@ -39,7 +42,11 @@ if(RACEVIDEO_BUILD_TESTS)
   include(CTest)
   find_package(GTest CONFIG REQUIRED)
 
-  add_executable(racevideo_tests tests/options_test.cc)
+  add_executable(
+    racevideo_tests
+    tests/mp4_gpmf_test.cc
+    tests/options_test.cc
+    tests/telemetry_test.cc)
   target_link_libraries(
     racevideo_tests
     PRIVATE racevideo_core racevideo_options GTest::gtest_main)
@@ -47,4 +54,3 @@ if(RACEVIDEO_BUILD_TESTS)
   include(GoogleTest)
   gtest_discover_tests(racevideo_tests)
 endif()
-

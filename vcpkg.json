@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "racevideo",
+  "version-semver": "0.1.0",
+  "dependencies": [
+    "abseil",
+    "gtest"
+  ],
+  "builtin-baseline": "dc31f86a441067d6c2e9e4ad52988eb41ef4f442"
+}

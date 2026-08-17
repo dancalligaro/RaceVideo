@@ -84,6 +84,66 @@ TEST(FindGpmfTrackTest, RejectsTruncatedBox) {
   std::filesystem::remove(path, ignored);
 }
 
+TEST(IndexGpmfTrackTest, MapsSampleOffsetsAndTimes) {
+  std::vector<char> stsd_payload(4, 0);
+  AppendUint32(stsd_payload, 1);
+  const std::vector<char> gpmd = Box("gpmd", {});
+  stsd_payload.insert(stsd_payload.end(), gpmd.begin(), gpmd.end());
+
+  std::vector<char> stsz_payload(4, 0);
+  AppendUint32(stsz_payload, 0);
+  AppendUint32(stsz_payload, 2);
+  AppendUint32(stsz_payload, 4);
+  AppendUint32(stsz_payload, 6);
+
+  std::vector<char> stco_payload(4, 0);
+  AppendUint32(stco_payload, 1);
+  AppendUint32(stco_payload, 0);
+
+  std::vector<char> stsc_payload(4, 0);
+  AppendUint32(stsc_payload, 1);
+  AppendUint32(stsc_payload, 1);
+  AppendUint32(stsc_payload, 2);
+  AppendUint32(stsc_payload, 1);
+
+  std::vector<char> stts_payload(4, 0);
+  AppendUint32(stts_payload, 1);
+  AppendUint32(stts_payload, 2);
+  AppendUint32(stts_payload, 1001);
+
+  std::vector<char> stbl_payload;
+  for (const std::vector<char>& child :
+       {Box("stsd", stsd_payload), Box("stsz", stsz_payload),
+        Box("stco", stco_payload), Box("stsc", stsc_payload),
+        Box("stts", stts_payload)}) {
+    stbl_payload.insert(stbl_payload.end(), child.begin(), child.end());
+  }
+  const std::vector<char> stbl = Box("stbl", stbl_payload);
+  const std::vector<char> minf = Box("minf", stbl);
+
+  std::vector<char> mdhd_payload(12, 0);
+  AppendUint32(mdhd_payload, 1000);
+  const std::vector<char> mdhd = Box("mdhd", mdhd_payload);
+  std::vector<char> mdia_payload = mdhd;
+  mdia_payload.insert(mdia_payload.end(), minf.begin(), minf.end());
+  const std::vector<char> mdia = Box("mdia", mdia_payload);
+  const std::vector<char> trak = Box("trak", mdia);
+  const std::vector<char> moov = Box("moov", trak);
+  const std::filesystem::path path =
+      WriteTestFile("racevideo_index_test.mp4", moov);
+
+  const absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(path);
+
+  ASSERT_TRUE(track.ok()) << track.status();
+  ASSERT_EQ(track->payloads.size(), 2);
+  EXPECT_EQ(track->timescale, 1000);
+  EXPECT_EQ(track->payloads[0].file_offset, 0);
+  EXPECT_EQ(track->payloads[0].size_bytes, 4);
+  EXPECT_EQ(track->payloads[1].file_offset, 4);
+  EXPECT_EQ(track->payloads[1].start_time_units, 1001);
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
 }  // namespace
 }  // namespace racevideo
-

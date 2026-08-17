@@ -25,6 +25,7 @@ add_library(racevideo_core
   src/common/run.h
   src/parser/mp4_gpmf.cc
   src/parser/mp4_gpmf.h
+  src/parser/mp4_gpmf_index.cc
   src/telemetry/telemetry.h)
 target_link_libraries(
   racevideo_core

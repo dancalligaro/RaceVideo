@@ -72,13 +72,10 @@ absl::StatusOr<Box> ReadBox(std::istream& input, std::uint64_t offset,
                             std::uint64_t parent_end) {
   absl::Status status = Seek(input, offset);
   if (!status.ok()) return status;
-
   absl::StatusOr<std::uint32_t> size32 = ReadUint32(input);
   if (!size32.ok()) return size32.status();
-
   std::array<char, 4> type{};
   if (!input.read(type.data(), type.size())) return ReadFailure("box type");
-
   std::uint64_t header_size = kBoxHeaderSize;
   std::uint64_t box_size = *size32;
   if (box_size == 1) {
@@ -89,7 +86,6 @@ absl::StatusOr<Box> ReadBox(std::istream& input, std::uint64_t offset,
   } else if (box_size == 0) {
     box_size = parent_end - offset;
   }
-
   if (box_size < header_size || box_size > parent_end - offset) {
     return absl::DataLossError("invalid MP4 box size");
   }
@@ -105,10 +101,8 @@ absl::StatusOr<bool> ScanSampleDescriptions(std::istream& input,
   }
   absl::Status status = Seek(input, stsd.data_offset + 4);
   if (!status.ok()) return status;
-
   absl::StatusOr<std::uint32_t> entry_count = ReadUint32(input);
   if (!entry_count.ok()) return entry_count.status();
-
   std::uint64_t offset = stsd.data_offset + 8;
   for (std::uint32_t index = 0; index < *entry_count; ++index) {
     absl::StatusOr<Box> entry = ReadBox(input, offset, stsd.end_offset);
@@ -124,13 +118,11 @@ absl::StatusOr<bool> ScanBoxes(std::istream& input, std::uint64_t begin,
   if (depth > kMaximumBoxDepth) {
     return absl::ResourceExhaustedError("MP4 box nesting is too deep");
   }
-
   std::uint64_t offset = begin;
   while (offset < end) {
     if (end - offset < kBoxHeaderSize) return ReadFailure("box header");
     absl::StatusOr<Box> box = ReadBox(input, offset, end);
     if (!box.ok()) return box.status();
-
     if (IsType(box->type, "stsd")) {
       absl::StatusOr<bool> found = ScanSampleDescriptions(input, *box);
       if (!found.ok() || *found) return found;
@@ -155,13 +147,11 @@ absl::StatusOr<GpmfTrackInfo> FindGpmfTrack(
         "cannot inspect input file: ", input_path.string(), ": ",
         error.message()));
   }
-
   std::ifstream input(input_path, std::ios::binary);
   if (!input) {
     return absl::PermissionDeniedError(
         absl::StrCat("cannot open input file: ", input_path.string()));
   }
-
   absl::StatusOr<bool> found = ScanBoxes(input, 0, file_size, 0);
   if (!found.ok()) return found.status();
   if (!*found) {
@@ -171,4 +161,3 @@ absl::StatusOr<GpmfTrackInfo> FindGpmfTrack(
 }
 
 }  // namespace racevideo
-

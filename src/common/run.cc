@@ -1,6 +1,7 @@
 #include "common/run.h"
 
 #include <filesystem>
+#include <iostream>
 #include <system_error>
 
 #include "absl/status/status.h"
@@ -34,12 +35,17 @@ absl::Status Run(const Options& options) {
         absl::StrCat("input is not a file: ", options.input_path.string()));
   }
 
-  absl::StatusOr<GpmfTrackInfo> track = FindGpmfTrack(options.input_path);
+  absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(options.input_path);
   if (!track.ok()) return track.status();
 
-  return absl::UnimplementedError(absl::StrCat(
-      "found GPMF metadata in ", track->file_size_bytes,
-      "-byte file; payload indexing is the next implementation milestone"));
+  const GpmfPayload& last = track->payloads.back();
+  const double duration_seconds =
+      static_cast<double>(last.start_time_units + last.duration_units) /
+      track->timescale;
+  std::cout << "GPMF payloads: " << track->payloads.size() << '\n'
+            << "Timescale: " << track->timescale << " units/second\n"
+            << "Duration: " << duration_seconds << " seconds\n";
+  return absl::OkStatus();
 }
 
 }  // namespace racevideo

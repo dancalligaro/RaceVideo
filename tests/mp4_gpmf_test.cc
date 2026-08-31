@@ -37,6 +37,50 @@ std::filesystem::path WriteTestFile(std::string_view name,
   return path;
 }
 
+std::vector<char> MinimalIndexMp4(std::uint32_t fixed_sample_size,
+                                  std::uint32_t sample_count,
+                                  std::uint32_t sample_description) {
+  std::vector<char> stsd_payload(4, 0);
+  AppendUint32(stsd_payload, 1);
+  const std::vector<char> gpmd = Box("gpmd", {});
+  stsd_payload.insert(stsd_payload.end(), gpmd.begin(), gpmd.end());
+
+  std::vector<char> stsz_payload(4, 0);
+  AppendUint32(stsz_payload, fixed_sample_size);
+  AppendUint32(stsz_payload, sample_count);
+
+  std::vector<char> stco_payload(4, 0);
+  AppendUint32(stco_payload, 1);
+  AppendUint32(stco_payload, 0);
+
+  std::vector<char> stsc_payload(4, 0);
+  AppendUint32(stsc_payload, 1);
+  AppendUint32(stsc_payload, 1);
+  AppendUint32(stsc_payload, sample_count);
+  AppendUint32(stsc_payload, sample_description);
+
+  std::vector<char> stts_payload(4, 0);
+  AppendUint32(stts_payload, 1);
+  AppendUint32(stts_payload, sample_count);
+  AppendUint32(stts_payload, 1000);
+
+  std::vector<char> stbl_payload;
+  for (const std::vector<char>& child :
+       {Box("stsd", stsd_payload), Box("stsz", stsz_payload),
+        Box("stco", stco_payload), Box("stsc", stsc_payload),
+        Box("stts", stts_payload)}) {
+    stbl_payload.insert(stbl_payload.end(), child.begin(), child.end());
+  }
+  const std::vector<char> stbl = Box("stbl", stbl_payload);
+  const std::vector<char> minf = Box("minf", stbl);
+  std::vector<char> mdhd_payload(12, 0);
+  AppendUint32(mdhd_payload, 1000);
+  const std::vector<char> mdhd = Box("mdhd", mdhd_payload);
+  std::vector<char> mdia_payload = mdhd;
+  mdia_payload.insert(mdia_payload.end(), minf.begin(), minf.end());
+  return Box("moov", Box("trak", Box("mdia", mdia_payload)));
+}
+
 TEST(FindGpmfTrackTest, FindsGpmdSampleDescription) {
   std::vector<char> stsd_payload(4, 0);
   AppendUint32(stsd_payload, 1);
@@ -141,6 +185,30 @@ TEST(IndexGpmfTrackTest, MapsSampleOffsetsAndTimes) {
   EXPECT_EQ(track->payloads[0].size_bytes, 4);
   EXPECT_EQ(track->payloads[1].file_offset, 4);
   EXPECT_EQ(track->payloads[1].start_time_units, 1001);
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(IndexGpmfTrackTest, RejectsExcessiveFixedSizeSampleCount) {
+  const std::vector<char> mp4 = MinimalIndexMp4(1, 10'000'001, 1);
+  const std::filesystem::path path =
+      WriteTestFile("racevideo_excessive_samples_test.mp4", mp4);
+
+  const absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(path);
+
+  EXPECT_EQ(track.status().code(), absl::StatusCode::kDataLoss);
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(IndexGpmfTrackTest, RejectsNonGpmfSampleDescriptionMapping) {
+  const std::vector<char> mp4 = MinimalIndexMp4(1, 1, 2);
+  const std::filesystem::path path =
+      WriteTestFile("racevideo_wrong_description_test.mp4", mp4);
+
+  const absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(path);
+
+  EXPECT_EQ(track.status().code(), absl::StatusCode::kDataLoss);
   std::error_code ignored;
   std::filesystem::remove(path, ignored);
 }

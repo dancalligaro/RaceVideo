@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package racevideo.proto;
+
+// RaceVideo's portable decoded-telemetry file format.
+message TelemetryFile {
+  // Incremented only for an incompatible interpretation of existing fields.
+  uint32 format_version = 1;
+  repeated GpsSample gps = 2;
+  repeated Vector3Sample accelerometer = 3;
+  repeated Vector3Sample gyroscope = 4;
+  string accelerometer_source_axis_order = 5;
+  bool accelerometer_values_are_camera_xyz = 6;
+  string gyroscope_source_axis_order = 7;
+  bool gyroscope_values_are_camera_xyz = 8;
+  string mount_orientation = 9;
+  double mount_orientation_confidence = 10;
+  bool inertial_values_are_forward_upright = 11;
+  repeated GForceSample filtered_g_force = 12;
+  double g_force_filter_cutoff_hz = 13;
+}
+
+message GpsSample {
+  int64 timestamp_us = 1;
+  double latitude_degrees = 2;
+  double longitude_degrees = 3;
+  double altitude_meters = 4;
+  float ground_speed_meters_per_second = 5;
+  float speed_3d_meters_per_second = 6;
+}
+
+// Raw streams may contain encoded camera components; metadata on TelemetryFile
+// states whether orthogonal camera and mount normalization has been applied.
+message Vector3Sample {
+  int64 timestamp_us = 1;
+  float component_0 = 2;
+  float component_1 = 3;
+  float component_2 = 4;
+}
+
+message GForceSample {
+  int64 timestamp_us = 1;
+  float lateral_g = 2;
+  float longitudinal_g = 3;
+  float vertical_dynamic_g = 4;
+}

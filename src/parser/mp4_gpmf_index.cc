@@ -17,6 +17,11 @@
 namespace racevideo {
 namespace {
 
+// A valid GPMF track normally has roughly one payload per second. This limit
+// keeps corrupt or hostile sample tables from requesting unbounded memory while
+// remaining far above any practical recording length.
+constexpr std::uint32_t kMaximumSampleCount = 10'000'000;
+
 struct Box {
   std::uint64_t data;
   std::uint64_t end;
@@ -32,6 +37,7 @@ struct TimeRule {
   std::uint32_t duration;
 };
 struct Tables {
+  std::uint64_t file_size = 0;
   std::uint32_t gpmd_description = 0;
   std::uint32_t timescale = 0;
   std::vector<std::uint32_t> sizes;
@@ -135,6 +141,11 @@ absl::Status Stsz(std::istream& in, const Box& box, Tables& t) {
   absl::StatusOr<std::uint32_t> count = U32(in);
   if (!fixed.ok()) return fixed.status();
   if (!count.ok()) return count.status();
+  if (*count > kMaximumSampleCount) return Bad("stsz sample count exceeds limit");
+  if (*fixed != 0 &&
+      *count > t.file_size / static_cast<std::uint64_t>(*fixed)) {
+    return Bad("fixed-size samples exceed file size");
+  }
   if (*fixed == 0 && *count > (box.end - box.data - 12) / 4) {
     return Bad("stsz count");
   }
@@ -240,6 +251,9 @@ absl::StatusOr<GpmfTrackInfo> Build(const Tables& t,
     while (rule + 1 < t.chunk_rules.size() &&
            t.chunk_rules[rule + 1].first <= number) ++rule;
     if (t.chunk_rules[rule].first > number) return Bad("stsc first chunk");
+    if (t.chunk_rules[rule].description != t.gpmd_description) {
+      return Bad("stsc references a non-GPMF sample description");
+    }
     std::uint64_t offset = t.chunks[chunk];
     for (std::uint32_t i = 0; i < t.chunk_rules[rule].count; ++i) {
       if (sample >= t.sizes.size()) return Bad("too many chunk samples");
@@ -276,7 +290,7 @@ absl::StatusOr<std::optional<GpmfTrackInfo>> Search(
     absl::StatusOr<Box> box = ReadBox(in, offset, end);
     if (!box.ok()) return box.status();
     if (Type(*box, "trak")) {
-      Tables tables;
+      Tables tables{.file_size = file_size};
       absl::Status status = ParseTrack(in, box->data, box->end, depth + 1, tables);
       if (!status.ok()) return status;
       if (tables.gpmd_description != 0) {

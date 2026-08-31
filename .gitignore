@@ -2,4 +2,4 @@
 /out/
 /.vs/
 /CMakeUserPresets.json
-
+debug-frames

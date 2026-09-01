@@ -383,7 +383,7 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   const int number_width = kSpeedDigits * digit_advance;
   const int unit_x = margin + speed_padding + number_width + digit_size;
   const int row_height = digit_size * 7;
-  const int row_gap = std::max(2, digit_size);
+  const int row_gap = std::max(9, digit_size * 2);
   const auto draw_speed_row = [&](double factor, std::string_view unit,
                                   int row_y) {
     const int speed = static_cast<int>(std::lround(std::clamp(

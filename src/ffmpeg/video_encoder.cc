@@ -5,6 +5,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
 #include <mutex>
 #include <span>
 #include <string>
@@ -97,6 +99,9 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
     workers.emplace_back(worker);
   }
 
+  int last_percentage = 0;
+  std::cout << "Encoding progress: " << std::setw(3) << last_percentage
+            << "%\r" << std::flush;
   absl::Status result = absl::OkStatus();
   while (next_to_write < frame_count) {
     std::vector<std::uint8_t> pixels;
@@ -125,6 +130,12 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
       state_changed.notify_all();
       break;
     }
+    const int percentage = std::min(100, next_to_write * 100 / frame_count);
+    if (percentage != last_percentage) {
+      last_percentage = percentage;
+      std::cout << "Encoding progress: " << std::setw(3) << percentage
+                << "%\r" << std::flush;
+    }
   }
 
   {
@@ -133,6 +144,7 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
   }
   state_changed.notify_all();
   for (std::thread& thread : workers) thread.join();
+  std::cout << '\n';
   return result;
 }
 

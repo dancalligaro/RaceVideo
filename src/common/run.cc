@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <system_error>
 
 #include "absl/status/status.h"
@@ -25,6 +27,16 @@ namespace {
 
 constexpr double kMetersPerSecondToKilometersPerHour = 3.6;
 constexpr double kMetersPerKilometer = 1000.0;
+
+std::string FormatDuration(double total_seconds) {
+  const int minutes = static_cast<int>(total_seconds / 60.0);
+  const double seconds = total_seconds - minutes * 60.0;
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(2) << total_seconds
+         << " seconds (" << minutes << " minutes " << seconds
+         << " seconds)";
+  return output.str();
+}
 
 }  // namespace
 
@@ -298,6 +310,10 @@ absl::Status Run(const Options& options) {
     if (actual_duration <= 0.0) {
       return absl::OutOfRangeError("video render range is empty");
     }
+    std::cout << "Input video duration: "
+              << FormatDuration(video->duration_seconds) << '\n'
+              << "Selected output duration: "
+              << FormatDuration(actual_duration) << '\n';
     absl::StatusOr<TelemetryData> telemetry =
         DecodeTelemetry(options.input_path, *track);
     if (!telemetry.ok()) return telemetry.status();

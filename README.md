@@ -177,6 +177,11 @@ error when the installed FFmpeg does not provide it. `--output_width=0`, the
 default, preserves the source resolution. Output widths must be even and at
 least 160 pixels; RaceVideo does not upscale the source video.
 
+Before encoding, RaceVideo prints the input and selected output durations.
+During encoding it reports frame progress as a percentage. After a successful
+run it prints elapsed wall-clock time as both total seconds and minutes plus
+seconds, making preview and encoder performance easy to compare.
+
 ## Privacy
 
 GoPro metadata can contain precise GPS locations, timestamps, device details,

@@ -188,6 +188,15 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
   EXPECT_TRUE(has_dark_speed_shadow);
   EXPECT_GT(visible_pixels_in_first_row, 0);
   EXPECT_GT(visible_pixels_in_second_row, 0);
+  // The outlined glyphs in the two rows retain two fully transparent scan
+  // lines between them at the minimum supported preview scale.
+  for (int y = 34; y <= 35; ++y) {
+    for (int x = 16; x < kIndicatorRightX; ++x) {
+      const std::size_t alpha_index =
+          (static_cast<std::size_t>(y) * kWidth + x) * 4 + 3;
+      EXPECT_EQ((*pixels)[alpha_index], 0);
+    }
+  }
 }
 
 TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {

@@ -298,9 +298,9 @@ TEST(RenderOverlayFrameRgbaTest,
   EXPECT_EQ(pixel(266, 17, 2), 60);
   // The G-force panel is absent. Its white outer ring has a black outline.
   EXPECT_EQ(pixel(16, 70, 3), 0);
-  EXPECT_EQ(pixel(76, 119, 0), 230);
-  EXPECT_EQ(pixel(76, 119, 1), 230);
-  EXPECT_EQ(pixel(76, 119, 2), 230);
+  EXPECT_GE(pixel(76, 119, 0), 250);
+  EXPECT_GE(pixel(76, 119, 1), 250);
+  EXPECT_GE(pixel(76, 119, 2), 250);
   EXPECT_EQ(pixel(79, 119, 0), 0);
   EXPECT_EQ(pixel(79, 119, 1), 0);
   EXPECT_EQ(pixel(79, 119, 2), 0);

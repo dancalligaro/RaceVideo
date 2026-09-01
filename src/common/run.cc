@@ -251,11 +251,13 @@ absl::Status Run(const Options& options) {
     if (!status.ok()) return status;
     status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
     if (!status.ok()) return status;
-    absl::StatusOr<OverlayData> overlay = BuildOverlayData(*telemetry);
-    if (!overlay.ok()) return overlay.status();
     const double available_duration = duration_seconds - options.start_seconds;
     const double actual_duration =
         std::min(options.duration_seconds, available_duration);
+    absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+        *telemetry, absl::Seconds(options.start_seconds),
+        absl::Seconds(options.start_seconds + actual_duration));
+    if (!overlay.ok()) return overlay.status();
     status = RenderDebugFrames(
         *telemetry, *overlay,
         {.output_directory = options.render_frames_path,
@@ -306,7 +308,9 @@ absl::Status Run(const Options& options) {
     if (!status.ok()) return status;
     status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
     if (!status.ok()) return status;
-    absl::StatusOr<OverlayData> overlay = BuildOverlayData(*telemetry);
+    absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+        *telemetry, absl::Seconds(options.start_seconds),
+        absl::Seconds(options.start_seconds + actual_duration));
     if (!overlay.ok()) return overlay.status();
     status = EncodeOverlayVideo(
         *telemetry, *overlay, *video,

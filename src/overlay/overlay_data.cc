@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -73,6 +75,39 @@ double Interpolate(double first, double second, double fraction) {
   return first + (second - first) * fraction;
 }
 
+TimedSample<GpsReading> InterpolateGps(
+    const TimedSample<GpsReading>& first,
+    const TimedSample<GpsReading>& second, absl::Duration timestamp) {
+  const double interval =
+      absl::ToDoubleSeconds(second.timestamp - first.timestamp);
+  const double fraction =
+      absl::ToDoubleSeconds(timestamp - first.timestamp) / interval;
+  double longitude_difference =
+      second.value.longitude_degrees - first.value.longitude_degrees;
+  if (longitude_difference > 180.0) longitude_difference -= 360.0;
+  if (longitude_difference < -180.0) longitude_difference += 360.0;
+  double longitude =
+      first.value.longitude_degrees + longitude_difference * fraction;
+  if (longitude > 180.0) longitude -= 360.0;
+  if (longitude < -180.0) longitude += 360.0;
+  return {
+      .timestamp = timestamp,
+      .value = {
+          .latitude_degrees =
+              Interpolate(first.value.latitude_degrees,
+                          second.value.latitude_degrees, fraction),
+          .longitude_degrees = longitude,
+          .altitude_meters = Interpolate(first.value.altitude_meters,
+                                         second.value.altitude_meters,
+                                         fraction),
+          .ground_speed_meters_per_second = Interpolate(
+              first.value.ground_speed_meters_per_second,
+              second.value.ground_speed_meters_per_second, fraction),
+          .speed_3d_meters_per_second = Interpolate(
+              first.value.speed_3d_meters_per_second,
+              second.value.speed_3d_meters_per_second, fraction)}};
+}
+
 double InterpolateHeading(double first, double second, double fraction) {
   double difference = std::fmod(second - first + 540.0, 360.0) - 180.0;
   double result = first + difference * fraction;
@@ -93,58 +128,90 @@ std::size_t UpperSampleIndex(const std::vector<Sample>& samples,
 
 }  // namespace
 
-absl::StatusOr<OverlayData> BuildOverlayData(const TelemetryData& telemetry) {
-  std::vector<const TimedSample<GpsReading>*> valid;
+absl::StatusOr<OverlayData> BuildOverlayDataImpl(
+    const TelemetryData& telemetry,
+    std::optional<std::pair<absl::Duration, absl::Duration>> range) {
+  std::vector<TimedSample<GpsReading>> valid;
   valid.reserve(telemetry.gps.size());
   for (const TimedSample<GpsReading>& sample : telemetry.gps) {
     if (!IsValid(sample)) continue;
     if (!valid.empty()) {
       const double delta_seconds =
-          absl::ToDoubleSeconds(sample.timestamp - valid.back()->timestamp);
+          absl::ToDoubleSeconds(sample.timestamp - valid.back().timestamp);
       if (!std::isfinite(delta_seconds) || delta_seconds <= 0.0) {
         return absl::DataLossError(
             "GPS timestamps must be strictly increasing");
       }
       const double segment_speed =
-          GeographicDistance(valid.back()->value, sample.value) /
+          GeographicDistance(valid.back().value, sample.value) /
           delta_seconds;
       if (!std::isfinite(segment_speed) ||
           segment_speed > kMaximumPlausibleSegmentSpeedMetersPerSecond) {
         continue;
       }
     }
-    valid.push_back(&sample);
+    valid.push_back(sample);
   }
   if (valid.size() < 2) {
     return absl::FailedPreconditionError(
         "at least two valid GPS samples are required for an overlay");
   }
 
+  if (range.has_value()) {
+    const absl::Duration start =
+        std::max(range->first, valid.front().timestamp);
+    const absl::Duration end =
+        std::min(range->second, valid.back().timestamp);
+    if (end <= start) {
+      return absl::OutOfRangeError(
+          "overlay range does not overlap at least two GPS positions");
+    }
+    auto sample_at = [&](absl::Duration timestamp) {
+      auto upper = std::lower_bound(
+          valid.begin(), valid.end(), timestamp,
+          [](const TimedSample<GpsReading>& sample, absl::Duration time) {
+            return sample.timestamp < time;
+          });
+      if (upper->timestamp == timestamp) return *upper;
+      return InterpolateGps(*(upper - 1), *upper, timestamp);
+    };
+    std::vector<TimedSample<GpsReading>> clipped;
+    clipped.reserve(valid.size());
+    clipped.push_back(sample_at(start));
+    for (const TimedSample<GpsReading>& sample : valid) {
+      if (sample.timestamp > start && sample.timestamp < end) {
+        clipped.push_back(sample);
+      }
+    }
+    clipped.push_back(sample_at(end));
+    valid = std::move(clipped);
+  }
+
   double latitude_sum = 0.0;
-  for (const auto* sample : valid) {
-    latitude_sum += sample->value.latitude_degrees;
+  for (const auto& sample : valid) {
+    latitude_sum += sample.value.latitude_degrees;
   }
   const double reference_latitude =
       latitude_sum / static_cast<double>(valid.size());
   const double cosine_latitude =
       std::cos(reference_latitude * kDegreesToRadians);
-  const double reference_longitude = valid.front()->value.longitude_degrees;
+  const double reference_longitude = valid.front().value.longitude_degrees;
   std::vector<ProjectedPoint> projected;
   projected.reserve(valid.size());
-  for (const auto* sample : valid) {
+  for (const auto& sample : valid) {
     double longitude_delta =
-        sample->value.longitude_degrees - reference_longitude;
+        sample.value.longitude_degrees - reference_longitude;
     if (longitude_delta > 180.0) longitude_delta -= 360.0;
     if (longitude_delta < -180.0) longitude_delta += 360.0;
     projected.push_back({
-        .timestamp = sample->timestamp,
+        .timestamp = sample.timestamp,
         .x_meters = kEarthRadiusMeters * longitude_delta *
                     kDegreesToRadians * cosine_latitude,
         .y_meters = kEarthRadiusMeters *
-                    (sample->value.latitude_degrees - reference_latitude) *
+                    (sample.value.latitude_degrees - reference_latitude) *
                     kDegreesToRadians,
         .speed_meters_per_second =
-            sample->value.ground_speed_meters_per_second});
+            sample.value.ground_speed_meters_per_second});
   }
 
   double minimum_x = projected.front().x_meters;
@@ -192,6 +259,16 @@ absl::StatusOr<OverlayData> BuildOverlayData(const TelemetryData& telemetry) {
          .heading_degrees = last_heading});
   }
   return overlay;
+}
+
+absl::StatusOr<OverlayData> BuildOverlayData(const TelemetryData& telemetry) {
+  return BuildOverlayDataImpl(telemetry, std::nullopt);
+}
+
+absl::StatusOr<OverlayData> BuildOverlayData(
+    const TelemetryData& telemetry, absl::Duration start,
+    absl::Duration end) {
+  return BuildOverlayDataImpl(telemetry, std::pair(start, end));
 }
 
 absl::StatusOr<OverlayFrameData> SampleOverlayFrame(

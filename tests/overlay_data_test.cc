@@ -58,6 +58,24 @@ TEST(BuildOverlayDataTest, IgnoresImplausibleGpsJump) {
   EXPECT_NEAR(overlay->track.front().x, 0.5, 1e-9);
 }
 
+TEST(BuildOverlayDataTest, ClipsTrackToRequestedRenderRange) {
+  TelemetryData telemetry;
+  telemetry.gps = {Gps(0, 30.000, -97.0, 10),
+                   Gps(10, 30.001, -97.0, 11),
+                   Gps(20, 30.002, -97.0, 12),
+                   Gps(30, 30.003, -97.0, 13)};
+
+  const absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+      telemetry, absl::Seconds(5), absl::Seconds(25));
+
+  ASSERT_TRUE(overlay.ok()) << overlay.status();
+  ASSERT_EQ(overlay->track.size(), 4);
+  EXPECT_EQ(overlay->track.front().timestamp, absl::Seconds(5));
+  EXPECT_EQ(overlay->track.back().timestamp, absl::Seconds(25));
+  EXPECT_EQ(overlay->navigation.front().timestamp, absl::Seconds(5));
+  EXPECT_EQ(overlay->navigation.back().timestamp, absl::Seconds(25));
+}
+
 TEST(SampleOverlayFrameTest, InterpolatesValuesAndSplitsTrackProgress) {
   TelemetryData telemetry;
   telemetry.gps = {Gps(0, 30.0, -97.0, 10),

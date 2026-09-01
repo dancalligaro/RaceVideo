@@ -117,5 +117,5 @@ if(RACEVIDEO_BUILD_TESTS)
     PRIVATE racevideo_core racevideo_options GTest::gtest_main)
 
   include(GoogleTest)
-  gtest_discover_tests(racevideo_tests)
+  gtest_discover_tests(racevideo_tests DISCOVERY_MODE PRE_TEST)
 endif()

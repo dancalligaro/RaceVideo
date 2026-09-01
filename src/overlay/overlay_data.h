@@ -38,6 +38,9 @@ struct OverlayFrameData {
 };
 
 absl::StatusOr<OverlayData> BuildOverlayData(const TelemetryData& telemetry);
+absl::StatusOr<OverlayData> BuildOverlayData(
+    const TelemetryData& telemetry, absl::Duration start,
+    absl::Duration end);
 absl::StatusOr<OverlayFrameData> SampleOverlayFrame(
     const TelemetryData& telemetry, const OverlayData& overlay,
     absl::Duration timestamp);

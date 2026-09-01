@@ -318,6 +318,8 @@ absl::Status Run(const Options& options) {
          .output_path = options.output_video_path,
          .start_seconds = options.start_seconds,
          .duration_seconds = actual_duration,
+         .output_width = options.output_width,
+         .video_encoder = options.video_encoder,
          .speed_units = options.speed_units});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "

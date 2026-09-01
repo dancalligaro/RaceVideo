@@ -138,6 +138,28 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
 
 }  // namespace
 
+absl::StatusOr<VideoDimensions> DetermineOutputDimensions(
+    const VideoInfo& video, int output_width) {
+  if (video.width <= 0 || video.height <= 0) {
+    return absl::InvalidArgumentError("source video dimensions are invalid");
+  }
+  if (output_width == 0) return VideoDimensions{video.width, video.height};
+  if (output_width < 160 || output_width > video.width ||
+      output_width % 2 != 0) {
+    return absl::InvalidArgumentError(
+        "output width must be even, at least 160, and no larger than the "
+        "source width");
+  }
+  const int output_height = static_cast<int>(std::lround(
+      static_cast<double>(video.height) * output_width / video.width / 2.0)) *
+                            2;
+  if (output_height < 90 || output_height > 4320) {
+    return absl::InvalidArgumentError(
+        "scaled output height is outside the supported range [90, 4320]");
+  }
+  return VideoDimensions{output_width, output_height};
+}
+
 absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
                                 const OverlayData& overlay,
                                 const VideoInfo& video,
@@ -146,24 +168,59 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
       FindExecutableOnPath("ffmpeg");
   if (!ffmpeg.ok()) return ffmpeg.status();
 
+  absl::StatusOr<VideoDimensions> output_dimensions =
+      DetermineOutputDimensions(video, options.output_width);
+  if (!output_dimensions.ok()) return output_dimensions.status();
+  if (options.video_encoder == VideoEncoder::kNvidia) {
+    absl::StatusOr<ProcessResult> encoders = RunProcessAndCaptureOutput(
+        *ffmpeg, {"-hide_banner", "-encoders"});
+    if (!encoders.ok()) return encoders.status();
+    if (encoders->exit_code != 0 ||
+        encoders->output.find("h264_nvenc") == std::string::npos) {
+      return absl::FailedPreconditionError(
+          "the installed FFmpeg does not provide the h264_nvenc encoder");
+    }
+  }
+
   const std::string dimensions =
-      absl::StrCat(video.width, "x", video.height);
+      absl::StrCat(output_dimensions->width, "x", output_dimensions->height);
+  const bool scale_output = output_dimensions->width != video.width ||
+                            output_dimensions->height != video.height;
+  const std::string filter =
+      scale_output
+          ? absl::StrCat("[0:v:0]scale=", output_dimensions->width, ":",
+                         output_dimensions->height,
+                         ":flags=fast_bilinear[base];"
+                         "[base][1:v:0]overlay=0:0:format=auto[v]")
+          : "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
   std::vector<std::string> arguments = {
       "-hide_banner", "-loglevel", "error", "-nostdin", "-ss",
       Number(options.start_seconds), "-t", Number(options.duration_seconds),
       "-i", PathAsUtf8(options.input_path), "-f", "rawvideo", "-pixel_format",
       "rgba", "-video_size", dimensions, "-framerate",
       Number(video.frames_per_second), "-i", "pipe:0", "-filter_complex",
-      "[0:v:0][1:v:0]overlay=0:0:format=auto[v]", "-map", "[v]", "-map",
-      "0:a?", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-      "-pix_fmt", "yuv420p", "-c:a", "copy", "-t",
-      Number(options.duration_seconds), "-movflags", "+faststart", "-n",
-      PathAsUtf8(options.output_path)};
+      filter, "-map", "[v]", "-map", "0:a?"};
+  if (options.video_encoder == VideoEncoder::kNvidia) {
+    arguments.insert(arguments.end(),
+                     {"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
+                      "-cq", "19", "-b:v", "0"});
+  } else {
+    arguments.insert(arguments.end(),
+                     {"-c:v", "libx264", "-preset", "medium", "-crf", "18"});
+  }
+  arguments.insert(arguments.end(),
+                   {"-pix_fmt", "yuv420p", "-c:a", "copy", "-t",
+                    Number(options.duration_seconds), "-movflags",
+                    "+faststart", "-n", PathAsUtf8(options.output_path)});
+
+  VideoInfo output_video = video;
+  output_video.width = output_dimensions->width;
+  output_video.height = output_dimensions->height;
 
   const int frame_count = static_cast<int>(
       std::ceil(options.duration_seconds * video.frames_per_second));
   const InputProducer producer = [&](const ByteSink& sink) -> absl::Status {
-    return ProduceOverlayFrames(telemetry, overlay, video, options,
+    return ProduceOverlayFrames(telemetry, overlay, output_video, options,
                                 frame_count, sink);
   };
   absl::StatusOr<ProcessResult> process =

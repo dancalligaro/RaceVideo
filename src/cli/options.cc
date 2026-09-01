@@ -35,6 +35,10 @@ ABSL_FLAG(double, duration_seconds, 0.0,
 ABSL_FLAG(double, render_fps, 30.0, "Debug overlay frame rate");
 ABSL_FLAG(int, render_width, 1920, "Debug overlay width in pixels");
 ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
+ABSL_FLAG(int, output_width, 0,
+          "Output video width; zero preserves the source resolution");
+ABSL_FLAG(std::string, video_encoder, "software",
+          "Video encoder: software or nvidia");
 ABSL_FLAG(std::string, speed_unit, "",
           "Speed rows to display: kmh, mph, kmh,mph, or mph,kmh; omitted "
           "hides speed");
@@ -62,6 +66,14 @@ absl::StatusOr<std::vector<SpeedUnit>> ParseSpeedUnits(std::string value) {
       "--speed_unit must be kmh, mph, kmh,mph, or mph,kmh");
 }
 
+absl::StatusOr<VideoEncoder> ParseVideoEncoder(std::string value) {
+  absl::AsciiStrToLower(&value);
+  if (value == "software") return VideoEncoder::kSoftware;
+  if (value == "nvidia") return VideoEncoder::kNvidia;
+  return absl::InvalidArgumentError(
+      "--video_encoder must be software or nvidia");
+}
+
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   std::vector<char*> positional_arguments = absl::ParseCommandLine(argc, argv);
   if (positional_arguments.size() > 1) {
@@ -84,6 +96,10 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   const double render_fps = absl::GetFlag(FLAGS_render_fps);
   const int render_width = absl::GetFlag(FLAGS_render_width);
   const int render_height = absl::GetFlag(FLAGS_render_height);
+  const int output_width = absl::GetFlag(FLAGS_output_width);
+  absl::StatusOr<VideoEncoder> video_encoder =
+      ParseVideoEncoder(absl::GetFlag(FLAGS_video_encoder));
+  if (!video_encoder.ok()) return video_encoder.status();
   absl::StatusOr<std::vector<SpeedUnit>> speed_units =
       ParseSpeedUnits(absl::GetFlag(FLAGS_speed_unit));
   if (!speed_units.ok()) return speed_units.status();
@@ -121,6 +137,11 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
           "video render range requires a nonnegative finite start and "
           "duration");
     }
+    if (output_width != 0 &&
+        (output_width < 160 || output_width > 7680 || output_width % 2 != 0)) {
+      return absl::InvalidArgumentError(
+          "--output_width must be zero or an even value in [160, 7680]");
+    }
     if (absl::GetFlag(FLAGS_imu_axis_order).empty()) {
       return absl::InvalidArgumentError(
           "--output_video requires --imu_axis_order so acceleration can be "
@@ -144,6 +165,8 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .render_fps = render_fps,
                  .render_width = render_width,
                  .render_height = render_height,
+                 .output_width = output_width,
+                 .video_encoder = *video_encoder,
                  .speed_units = std::move(*speed_units)};
 }
 

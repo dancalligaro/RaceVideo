@@ -42,5 +42,12 @@ TEST(ParseSpeedUnitsTest, IsCaseInsensitiveAndRejectsOtherLists) {
             absl::StatusCode::kInvalidArgument);
 }
 
+TEST(ParseVideoEncoderTest, SupportsSoftwareAndNvidia) {
+  EXPECT_EQ(*ParseVideoEncoder("software"), VideoEncoder::kSoftware);
+  EXPECT_EQ(*ParseVideoEncoder("NVIDIA"), VideoEncoder::kNvidia);
+  EXPECT_EQ(ParseVideoEncoder("automatic").status().code(),
+            absl::StatusCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace racevideo

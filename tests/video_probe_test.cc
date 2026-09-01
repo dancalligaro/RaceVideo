@@ -1,11 +1,32 @@
 #include "ffmpeg/video_probe.h"
 
+#include "ffmpeg/video_encoder.h"
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 
 namespace racevideo {
 namespace {
+
+TEST(DetermineOutputDimensionsTest, PreservesOrScalesAspectRatioToEvenHeight) {
+  const VideoInfo video = {.width = 1920,
+                           .height = 1080,
+                           .frames_per_second = 30,
+                           .duration_seconds = 10,
+                           .has_audio = true};
+
+  EXPECT_EQ(*DetermineOutputDimensions(video, 0),
+            (VideoDimensions{1920, 1080}));
+  EXPECT_EQ(*DetermineOutputDimensions(video, 400),
+            (VideoDimensions{400, 226}));
+  EXPECT_EQ(*DetermineOutputDimensions(video, 640),
+            (VideoDimensions{640, 360}));
+  EXPECT_EQ(DetermineOutputDimensions(video, 401).status().code(),
+            absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(DetermineOutputDimensions(video, 2000).status().code(),
+            absl::StatusCode::kInvalidArgument);
+}
 
 TEST(ParseFfprobeOutputTest, ReadsVideoAudioAndFractionalFrameRate) {
   constexpr char kOutput[] = R"(

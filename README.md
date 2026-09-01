@@ -162,6 +162,21 @@ Existing output files are never overwritten.
 Speed is hidden unless `--speed_unit` is provided. Use `kmh` or `mph` for one
 row, or an ordered pair such as `kmh,mph` or `mph,kmh` for two stacked rows.
 
+For a faster, lower-resolution preview, set an even output width. RaceVideo
+preserves the source aspect ratio and calculates an even output height:
+
+```powershell
+racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
+  --output_video="preview.mp4" --output_width=400 `
+  --video_encoder="nvidia" --speed_unit="kmh,mph"
+```
+
+`--video_encoder="software"` is the default and uses `libx264`.
+`--video_encoder="nvidia"` uses FFmpeg's `h264_nvenc` encoder and reports an
+error when the installed FFmpeg does not provide it. `--output_width=0`, the
+default, preserves the source resolution. Output widths must be even and at
+least 160 pixels; RaceVideo does not upscale the source video.
+
 ## Privacy
 
 GoPro metadata can contain precise GPS locations, timestamps, device details,

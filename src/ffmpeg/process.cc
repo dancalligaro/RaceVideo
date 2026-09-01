@@ -30,6 +30,15 @@ class Handle {
   explicit Handle(HANDLE handle) : handle_(handle) {}
   Handle(const Handle&) = delete;
   Handle& operator=(const Handle&) = delete;
+  Handle(Handle&& other) noexcept : handle_(other.release()) {}
+  Handle& operator=(Handle&& other) noexcept {
+    if (this == &other) return *this;
+    if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle_);
+    }
+    handle_ = other.release();
+    return *this;
+  }
   ~Handle() {
     if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) {
       CloseHandle(handle_);
@@ -45,6 +54,61 @@ class Handle {
  private:
   HANDLE handle_ = nullptr;
 };
+
+absl::StatusOr<Handle> CreateChildProcessJob() {
+  Handle job(CreateJobObjectW(nullptr, nullptr));
+  if (job.get() == nullptr) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot create child process job: Windows error ", GetLastError()));
+  }
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags =
+      JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation,
+                               &limits, sizeof(limits))) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot configure child process job: Windows error ",
+        GetLastError()));
+  }
+  return job;
+}
+
+absl::Status StartChildProcess(const std::filesystem::path& executable,
+                               std::wstring& command_line,
+                               STARTUPINFOW* startup,
+                               PROCESS_INFORMATION* process, Handle* job) {
+  absl::StatusOr<Handle> new_job = CreateChildProcessJob();
+  if (!new_job.ok()) return new_job.status();
+  if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr, nullptr,
+                      TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                      nullptr, startup, process)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot start ", executable.string(), ": Windows error ",
+        GetLastError()));
+  }
+  if (!AssignProcessToJobObject(new_job->get(), process->hProcess)) {
+    const DWORD error = GetLastError();
+    TerminateProcess(process->hProcess, ERROR_PROCESS_ABORTED);
+    CloseHandle(process->hThread);
+    CloseHandle(process->hProcess);
+    process->hThread = nullptr;
+    process->hProcess = nullptr;
+    return absl::UnknownError(absl::StrCat(
+        "cannot attach child process to cleanup job: Windows error ", error));
+  }
+  if (ResumeThread(process->hThread) == static_cast<DWORD>(-1)) {
+    const DWORD error = GetLastError();
+    TerminateJobObject(new_job->get(), ERROR_PROCESS_ABORTED);
+    CloseHandle(process->hThread);
+    CloseHandle(process->hProcess);
+    process->hThread = nullptr;
+    process->hProcess = nullptr;
+    return absl::UnknownError(absl::StrCat(
+        "cannot resume child process: Windows error ", error));
+  }
+  *job = std::move(*new_job);
+  return absl::OkStatus();
+}
 
 std::wstring Widen(std::string_view value) {
   if (value.empty()) return {};
@@ -180,13 +244,10 @@ absl::StatusOr<ProcessResult> RunProcessAndCaptureOutput(
   startup.hStdError = write_pipe.get();
   PROCESS_INFORMATION process{};
   std::wstring command_line = BuildCommandLine(executable, arguments);
-  if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr, nullptr,
-                      TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup,
-                      &process)) {
-    return absl::UnknownError(absl::StrCat(
-        "cannot start ", executable.string(), ": Windows error ",
-        GetLastError()));
-  }
+  Handle job;
+  const absl::Status start_status =
+      StartChildProcess(executable, command_line, &startup, &process, &job);
+  if (!start_status.ok()) return start_status;
   Handle process_handle(process.hProcess);
   Handle thread_handle(process.hThread);
   write_pipe.release();
@@ -274,13 +335,10 @@ absl::StatusOr<ProcessResult> RunProcessWithInput(
   startup.hStdError = output_write.get();
   PROCESS_INFORMATION process{};
   std::wstring command_line = BuildCommandLine(executable, arguments);
-  if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr, nullptr,
-                      TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup,
-                      &process)) {
-    return absl::UnknownError(absl::StrCat(
-        "cannot start ", executable.string(), ": Windows error ",
-        GetLastError()));
-  }
+  Handle job;
+  const absl::Status start_status =
+      StartChildProcess(executable, command_line, &startup, &process, &job);
+  if (!start_status.ok()) return start_status;
   Handle process_handle(process.hProcess);
   Handle thread_handle(process.hThread);
   input_read.release();

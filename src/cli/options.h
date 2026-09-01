@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "absl/status/statusor.h"
 #include "overlay/display_options.h"
@@ -25,10 +26,11 @@ struct Options {
   double render_fps = 30.0;
   int render_width = 1920;
   int render_height = 1080;
-  SpeedUnit speed_unit = SpeedUnit::kKilometersPerHour;
+  std::vector<SpeedUnit> speed_units;
 };
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]);
+absl::StatusOr<std::vector<SpeedUnit>> ParseSpeedUnits(std::string value);
 
 }  // namespace racevideo
 

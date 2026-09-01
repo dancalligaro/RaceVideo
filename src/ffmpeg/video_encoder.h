@@ -2,6 +2,7 @@
 #define RACEVIDEO_FFMPEG_VIDEO_ENCODER_H_
 
 #include <filesystem>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "ffmpeg/video_probe.h"
@@ -16,7 +17,7 @@ struct VideoEncodeOptions {
   std::filesystem::path output_path;
   double start_seconds;
   double duration_seconds;
-  SpeedUnit speed_unit;
+  std::vector<SpeedUnit> speed_units;
 };
 
 absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,

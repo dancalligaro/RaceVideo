@@ -298,15 +298,24 @@ void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
                 int radius) {
   canvas.Circle(cx, cy, radius, 9, kShadow);
   canvas.Circle(cx, cy, radius, 3, kWhite);
-  canvas.Circle(cx, cy, radius / 2, 2, kGrid);
+  constexpr double kMaximumDisplayedG = 1.2;
+  const int one_g_radius =
+      static_cast<int>(std::lround(radius / kMaximumDisplayedG));
+  canvas.Circle(cx, cy, one_g_radius, 2, kGrid);
   canvas.Line(cx - radius, cy, cx + radius, cy, 1, kGrid);
   canvas.Line(cx, cy - radius, cx, cy + radius, 1, kGrid);
-  constexpr double kDisplayedG = 1.5;
-  const double lateral = std::clamp(g.lateral_g / kDisplayedG, -1.0, 1.0);
-  const double longitudinal =
-      std::clamp(g.longitudinal_g / kDisplayedG, -1.0, 1.0);
-  canvas.Disc(cx + static_cast<int>(lateral * radius),
-              cy - static_cast<int>(longitudinal * radius), 10, kRed);
+  const double magnitude = std::hypot(g.lateral_g, g.longitudinal_g);
+  const double displayed_magnitude = std::min(magnitude, kMaximumDisplayedG);
+  const double position_scale =
+      magnitude > 0.0 ? displayed_magnitude / magnitude / kMaximumDisplayedG
+                      : 0.0;
+  const int dot_x = cx +
+                    static_cast<int>(std::lround(
+                        g.lateral_g * position_scale * radius));
+  const int dot_y = cy -
+                    static_cast<int>(std::lround(
+                        g.longitudinal_g * position_scale * radius));
+  canvas.Disc(dot_x, dot_y, std::max(8, radius / 10), kRed);
 }
 
 struct WriteContext { std::ofstream stream; bool failed = false; };
@@ -336,7 +345,8 @@ absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
 
 absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
     const TelemetryData& telemetry, const OverlayData& overlay,
-    double timestamp_seconds, int width, int height, SpeedUnit speed_unit) {
+    double timestamp_seconds, int width, int height,
+    const std::vector<SpeedUnit>& speed_units) {
   if (!std::isfinite(timestamp_seconds) || timestamp_seconds < 0.0 ||
       width < 160 || height < 90 || width > 7680 || height > 4320) {
     return absl::InvalidArgumentError(
@@ -353,7 +363,7 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   DrawTrack(canvas, overlay, frame->explored_track_point_count,
             frame->heading_degrees,
             width - track_size - margin, margin, track_size);
-  const int dial_radius = std::max(38, height / 11);
+  const int dial_radius = std::max(30, height * 4 / 55);
   const int label_scale = std::max(1, height / 360);
   const int magnitude_y = height - margin - 7 * label_scale;
   const int gauge_center_x = margin + dial_radius;
@@ -365,28 +375,33 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
                    gauge_center_x - TextWidth(magnitude, label_scale) / 2,
                    magnitude_y, label_scale, kWhite);
 
-  const int digit_size = std::max(3, height / 90);
-  const double speed_factor =
-      speed_unit == SpeedUnit::kMilesPerHour ? 2.2369362920544 : 3.6;
-  const int speed = static_cast<int>(std::lround(std::clamp(
-      frame->speed_meters_per_second * speed_factor, 0.0, 999.0)));
-  const std::string speed_text = std::to_string(std::max(0, speed));
-  const std::string_view unit =
-      speed_unit == SpeedUnit::kMilesPerHour ? "MPH" : "KMH";
+  const int digit_size = std::max(2, std::max(3, height / 90) * 7 / 10);
   const int unit_scale = std::max(1, digit_size / 2);
   const int speed_padding = digit_size * 2;
   constexpr int kSpeedDigits = 3;
   const int digit_advance = digit_size * 6;
   const int number_width = kSpeedDigits * digit_advance;
-  const int speed_height = digit_size * 9;
-  const int number_x = margin + speed_padding +
-                       (kSpeedDigits - static_cast<int>(speed_text.size())) *
-                           digit_advance;
-  DrawOutlinedNumber(canvas, speed, number_x, margin + digit_size, digit_size,
-                     kWhite);
   const int unit_x = margin + speed_padding + number_width + digit_size;
-  const int unit_y = margin + (speed_height - 7 * unit_scale) / 2;
-  DrawOutlinedText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
+  const int row_height = digit_size * 7;
+  const int row_gap = std::max(2, digit_size);
+  const auto draw_speed_row = [&](double factor, std::string_view unit,
+                                  int row_y) {
+    const int speed = static_cast<int>(std::lround(std::clamp(
+        frame->speed_meters_per_second * factor, 0.0, 999.0)));
+    const int digit_count =
+        static_cast<int>(std::to_string(std::max(0, speed)).size());
+    const int number_x =
+        margin + speed_padding + (kSpeedDigits - digit_count) * digit_advance;
+    DrawOutlinedNumber(canvas, speed, number_x, row_y, digit_size, kWhite);
+    const int unit_y = row_y + (row_height - 7 * unit_scale) / 2;
+    DrawOutlinedText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
+  };
+  for (std::size_t index = 0; index < speed_units.size(); ++index) {
+    const bool miles = speed_units[index] == SpeedUnit::kMilesPerHour;
+    draw_speed_row(miles ? 2.2369362920544 : 3.6,
+                   miles ? "MPH" : "KMH",
+                   margin + static_cast<int>(index) * (row_height + row_gap));
+  }
   return canvas.TakePixels();
 }
 
@@ -415,7 +430,7 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
                            frame_index / options.frames_per_second;
     absl::StatusOr<std::vector<std::uint8_t>> pixels =
         RenderOverlayFrameRgba(telemetry, overlay, seconds, options.width,
-                               options.height, options.speed_unit);
+                               options.height, options.speed_units);
     if (!pixels.ok()) return pixels.status();
     Canvas canvas(options.width, options.height);
     std::copy(pixels->begin(), pixels->end(),

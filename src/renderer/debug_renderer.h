@@ -20,7 +20,7 @@ struct DebugRenderOptions {
   double frames_per_second;
   int width;
   int height;
-  SpeedUnit speed_unit = SpeedUnit::kKilometersPerHour;
+  std::vector<SpeedUnit> speed_units;
 };
 
 absl::Status RenderDebugFrames(const TelemetryData& telemetry,
@@ -29,7 +29,8 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
 
 absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
     const TelemetryData& telemetry, const OverlayData& overlay,
-    double timestamp_seconds, int width, int height, SpeedUnit speed_unit);
+    double timestamp_seconds, int width, int height,
+    const std::vector<SpeedUnit>& speed_units);
 
 }  // namespace racevideo
 

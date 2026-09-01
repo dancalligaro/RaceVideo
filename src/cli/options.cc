@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/flags/flag.h"
@@ -34,10 +35,32 @@ ABSL_FLAG(double, duration_seconds, 0.0,
 ABSL_FLAG(double, render_fps, 30.0, "Debug overlay frame rate");
 ABSL_FLAG(int, render_width, 1920, "Debug overlay width in pixels");
 ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
-ABSL_FLAG(std::string, speed_unit, "kmh",
-          "Displayed speed unit: kmh or mph");
+ABSL_FLAG(std::string, speed_unit, "",
+          "Speed rows to display: kmh, mph, kmh,mph, or mph,kmh; omitted "
+          "hides speed");
 
 namespace racevideo {
+
+absl::StatusOr<std::vector<SpeedUnit>> ParseSpeedUnits(std::string value) {
+  absl::AsciiStrToLower(&value);
+  if (value.empty()) return std::vector<SpeedUnit>{};
+  if (value == "kmh") {
+    return std::vector<SpeedUnit>{SpeedUnit::kKilometersPerHour};
+  }
+  if (value == "mph") {
+    return std::vector<SpeedUnit>{SpeedUnit::kMilesPerHour};
+  }
+  if (value == "kmh,mph") {
+    return std::vector<SpeedUnit>{SpeedUnit::kKilometersPerHour,
+                                  SpeedUnit::kMilesPerHour};
+  }
+  if (value == "mph,kmh") {
+    return std::vector<SpeedUnit>{SpeedUnit::kMilesPerHour,
+                                  SpeedUnit::kKilometersPerHour};
+  }
+  return absl::InvalidArgumentError(
+      "--speed_unit must be kmh, mph, kmh,mph, or mph,kmh");
+}
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   std::vector<char*> positional_arguments = absl::ParseCommandLine(argc, argv);
@@ -61,16 +84,9 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   const double render_fps = absl::GetFlag(FLAGS_render_fps);
   const int render_width = absl::GetFlag(FLAGS_render_width);
   const int render_height = absl::GetFlag(FLAGS_render_height);
-  std::string speed_unit_name = absl::GetFlag(FLAGS_speed_unit);
-  absl::AsciiStrToLower(&speed_unit_name);
-  SpeedUnit speed_unit;
-  if (speed_unit_name == "kmh") {
-    speed_unit = SpeedUnit::kKilometersPerHour;
-  } else if (speed_unit_name == "mph") {
-    speed_unit = SpeedUnit::kMilesPerHour;
-  } else {
-    return absl::InvalidArgumentError("--speed_unit must be kmh or mph");
-  }
+  absl::StatusOr<std::vector<SpeedUnit>> speed_units =
+      ParseSpeedUnits(absl::GetFlag(FLAGS_speed_unit));
+  if (!speed_units.ok()) return speed_units.status();
   if (!render_frames.empty()) {
     if (!std::isfinite(start_seconds) || start_seconds < 0.0 ||
         !std::isfinite(duration_seconds) || duration_seconds <= 0.0 ||
@@ -128,7 +144,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .render_fps = render_fps,
                  .render_width = render_width,
                  .render_height = render_height,
-                 .speed_unit = speed_unit};
+                 .speed_units = std::move(*speed_units)};
 }
 
 }  // namespace racevideo

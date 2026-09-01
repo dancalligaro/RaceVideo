@@ -75,10 +75,12 @@ add_library(racevideo_core
   src/telemetry/mount_orientation.cc
   src/telemetry/mount_orientation.h
   src/telemetry/telemetry.h)
+file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" RACEVIDEO_SOURCE_DIR)
 protobuf_generate(
   TARGET racevideo_core
   LANGUAGE cpp
-  PROTOS proto/telemetry.proto)
+  IMPORT_DIRS "${RACEVIDEO_SOURCE_DIR}"
+  PROTOS "${RACEVIDEO_SOURCE_DIR}/proto/telemetry.proto")
 target_link_libraries(
   racevideo_core
   PUBLIC racevideo_options absl::flags absl::flags_parse absl::status

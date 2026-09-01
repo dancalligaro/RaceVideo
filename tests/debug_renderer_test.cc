@@ -91,8 +91,7 @@ TEST(RenderOverlayFrameRgbaTest, ReturnsOneTransparentRgbaImage) {
   ASSERT_TRUE(overlay.ok()) << overlay.status();
 
   const absl::StatusOr<std::vector<std::uint8_t>> pixels =
-      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, 320, 180,
-                             SpeedUnit::kKilometersPerHour);
+      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, 320, 180, {});
 
   ASSERT_TRUE(pixels.ok()) << pixels.status();
   ASSERT_EQ(pixels->size(), 320u * 180u * 4u);
@@ -104,6 +103,13 @@ TEST(RenderOverlayFrameRgbaTest, ReturnsOneTransparentRgbaImage) {
   }
   EXPECT_TRUE(has_transparent_pixel);
   EXPECT_TRUE(has_visible_pixel);
+  for (int y = 0; y < 70; ++y) {
+    for (int x = 0; x < 100; ++x) {
+      const std::size_t alpha_index =
+          (static_cast<std::size_t>(y) * 320 + x) * 4 + 3;
+      EXPECT_EQ((*pixels)[alpha_index], 0);
+    }
+  }
 }
 
 TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
@@ -127,18 +133,19 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
 
   const absl::StatusOr<std::vector<std::uint8_t>> pixels =
       RenderOverlayFrameRgba(telemetry, *overlay, 0.5, kWidth, kHeight,
-                             SpeedUnit::kMilesPerHour);
+                             {SpeedUnit::kMilesPerHour,
+                              SpeedUnit::kKilometersPerHour});
 
   ASSERT_TRUE(pixels.ok()) << pixels.status();
-  // At 180p, the renderer uses a 3-pixel digit stroke and a 16-pixel margin.
-  // Reserve the former 86-pixel indicator area through x=101 even though its
-  // background panel is no longer drawn.
+  // At 180p, the compact renderer uses a 2-pixel digit stroke and a 16-pixel
+  // margin. The selected MPH row appears first and leaves at least four pixels
+  // after its unit label.
   constexpr int kPanelLeft = 16;
   constexpr int kPanelTop = 16;
-  constexpr int kPanelHeight = 27;
-  constexpr int kIndicatorRightX = 102;
+  constexpr int kRowHeight = 14;
+  constexpr int kIndicatorRightX = 79;
   int rightmost_text_x = -1;
-  for (int y = kPanelTop + 1; y < kPanelTop + kPanelHeight - 1; ++y) {
+  for (int y = kPanelTop; y < kPanelTop + kRowHeight; ++y) {
     for (int x = kPanelLeft + 1; x < kIndicatorRightX; ++x) {
       const std::size_t alpha_index =
           (static_cast<std::size_t>(y) * kWidth + x) * 4 + 3;
@@ -154,15 +161,24 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
   constexpr int kRequiredRightPaddingPixels = 4;
   EXPECT_GE(kIndicatorRightX - rightmost_text_x - 1,
             kRequiredRightPaddingPixels);
-  // Empty space inside the old panel bounds remains transparent, while the
-  // outlined glyphs contain dark shadow pixels.
-  EXPECT_EQ((*pixels)[(static_cast<std::size_t>(40) * kWidth + 17) * 4 + 3],
+  // Empty space around the readout remains transparent, while both rows are
+  // present and the outlined glyphs contain dark shadow pixels.
+  EXPECT_EQ((*pixels)[(static_cast<std::size_t>(50) * kWidth + 17) * 4 + 3],
             0);
   bool has_dark_speed_shadow = false;
-  for (int y = 16; y < 43; ++y) {
+  int visible_pixels_in_first_row = 0;
+  int visible_pixels_in_second_row = 0;
+  for (int y = 16; y < 46; ++y) {
     for (int x = 16; x < kIndicatorRightX; ++x) {
       const std::size_t index =
           (static_cast<std::size_t>(y) * kWidth + x) * 4;
+      if ((*pixels)[index + 3] != 0) {
+        if (y < 30) {
+          ++visible_pixels_in_first_row;
+        } else if (y >= 32) {
+          ++visible_pixels_in_second_row;
+        }
+      }
       has_dark_speed_shadow =
           has_dark_speed_shadow ||
           ((*pixels)[index] == 0 && (*pixels)[index + 1] == 0 &&
@@ -170,6 +186,8 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
     }
   }
   EXPECT_TRUE(has_dark_speed_shadow);
+  EXPECT_GT(visible_pixels_in_first_row, 0);
+  EXPECT_GT(visible_pixels_in_second_row, 0);
 }
 
 TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {
@@ -197,7 +215,7 @@ TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {
       return absl::StatusOr<std::vector<std::uint8_t>>(overlay.status());
     }
     return RenderOverlayFrameRgba(telemetry, *overlay, 0.5, kWidth, kHeight,
-                                  SpeedUnit::kMilesPerHour);
+                                  {SpeedUnit::kMilesPerHour});
   };
   const absl::StatusOr<std::vector<std::uint8_t>> one_digit = render_mph(9);
   const absl::StatusOr<std::vector<std::uint8_t>> two_digits = render_mph(99);
@@ -209,9 +227,9 @@ TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {
 
   auto rightmost_number_x = [&](const std::vector<std::uint8_t>& pixels) {
     int result = -1;
-    // Inspect only the number field, excluding its panel border and MPH text.
-    for (int y = 17; y < 42; ++y) {
-      for (int x = 17; x < 78; ++x) {
+    // Inspect only the first row's number field, excluding the MPH text.
+    for (int y = 16; y < 30; ++y) {
+      for (int x = 16; x < 58; ++x) {
         const std::size_t red_index =
             (static_cast<std::size_t>(y) * kWidth + x) * 4;
         if (pixels[red_index] > 220 && pixels[red_index + 3] > 240) {
@@ -251,7 +269,7 @@ TEST(RenderOverlayFrameRgbaTest,
 
   const absl::StatusOr<std::vector<std::uint8_t>> pixels =
       RenderOverlayFrameRgba(telemetry, *overlay, 1.0, kWidth, kHeight,
-                             SpeedUnit::kKilometersPerHour);
+                             {SpeedUnit::kKilometersPerHour});
 
   ASSERT_TRUE(pixels.ok()) << pixels.status();
   auto pixel = [&](int x, int y, int component) {
@@ -280,13 +298,66 @@ TEST(RenderOverlayFrameRgbaTest,
   EXPECT_EQ(pixel(266, 17, 2), 60);
   // The G-force panel is absent. Its white outer ring has a black outline.
   EXPECT_EQ(pixel(16, 70, 3), 0);
-  EXPECT_EQ(pixel(92, 111, 0), 230);
-  EXPECT_EQ(pixel(92, 111, 1), 230);
-  EXPECT_EQ(pixel(92, 111, 2), 230);
-  EXPECT_EQ(pixel(95, 111, 0), 0);
-  EXPECT_EQ(pixel(95, 111, 1), 0);
-  EXPECT_EQ(pixel(95, 111, 2), 0);
-  EXPECT_GT(pixel(95, 111, 3), 0);
+  EXPECT_EQ(pixel(76, 119, 0), 230);
+  EXPECT_EQ(pixel(76, 119, 1), 230);
+  EXPECT_EQ(pixel(76, 119, 2), 230);
+  EXPECT_EQ(pixel(79, 119, 0), 0);
+  EXPECT_EQ(pixel(79, 119, 1), 0);
+  EXPECT_EQ(pixel(79, 119, 2), 0);
+  EXPECT_GT(pixel(79, 119, 3), 0);
+}
+
+TEST(RenderOverlayFrameRgbaTest, MapsOneGToInnerRingAndCapsDotAtOnePointTwoG) {
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 180;
+  auto render_lateral_g = [&](double lateral_g) {
+    TelemetryData telemetry;
+    telemetry.gps = {
+        {.timestamp = absl::Seconds(0),
+         .value = {.latitude_degrees = 30.0,
+                   .longitude_degrees = -97.0,
+                   .ground_speed_meters_per_second = 10}},
+        {.timestamp = absl::Seconds(1),
+         .value = {.latitude_degrees = 30.001,
+                   .longitude_degrees = -97.0,
+                   .ground_speed_meters_per_second = 10}}};
+    telemetry.filtered_g_force = {
+        {.timestamp = absl::Seconds(0), .value = {.lateral_g = lateral_g}},
+        {.timestamp = absl::Seconds(1), .value = {.lateral_g = lateral_g}}};
+    absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+    if (!overlay.ok()) {
+      return absl::StatusOr<std::vector<std::uint8_t>>(overlay.status());
+    }
+    return RenderOverlayFrameRgba(telemetry, *overlay, 0.5, kWidth, kHeight,
+                                  {});
+  };
+  const absl::StatusOr<std::vector<std::uint8_t>> one_g =
+      render_lateral_g(1.0);
+  const absl::StatusOr<std::vector<std::uint8_t>> one_point_two_g =
+      render_lateral_g(1.2);
+  const absl::StatusOr<std::vector<std::uint8_t>> beyond_scale =
+      render_lateral_g(2.5);
+  ASSERT_TRUE(one_g.ok()) << one_g.status();
+  ASSERT_TRUE(one_point_two_g.ok()) << one_point_two_g.status();
+  ASSERT_TRUE(beyond_scale.ok()) << beyond_scale.status();
+  auto rightmost_red_x = [](const std::vector<std::uint8_t>& pixels) {
+    int result = -1;
+    for (int x = 0; x < 100; ++x) {
+      const std::size_t index =
+          (static_cast<std::size_t>(119) * kWidth + x) * 4;
+      if (pixels[index] == 255 && pixels[index + 1] == 70 &&
+          pixels[index + 2] == 60 && pixels[index + 3] == 255) {
+        result = x;
+      }
+    }
+    return result;
+  };
+  // The 30-pixel outer radius represents 1.2 g, so the 1 g ring is 25
+  // pixels from the center at (46, 119). The dot itself has an 8-pixel
+  // radius, making its right edge 79 pixels at 1 g and 84 pixels at 1.2 g.
+  EXPECT_EQ(rightmost_red_x(*one_g), 79);
+  EXPECT_EQ(rightmost_red_x(*one_point_two_g), 84);
+  EXPECT_EQ(rightmost_red_x(*beyond_scale), 84);
 }
 
 }  // namespace

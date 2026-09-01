@@ -28,6 +28,16 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+To configure and build an optimized Release binary:
+
+```powershell
+$env:VCPKG_ROOT = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\vcpkg'
+cmake --preset release
+cmake --build --preset release
+```
+
+The resulting executable is `build\release\racevideo.exe`.
+
 The project follows the Google C++ style, uses Abseil status-based error
 handling, and compiles application targets with C++ exceptions disabled.
 
@@ -149,8 +159,8 @@ process. FFmpeg composites them over the source, encodes H.264 video, and copies
 the original audio stream. Omit `--duration_seconds` (or set it to zero) to
 render from the requested start time through the remainder of the video.
 Existing output files are never overwritten.
-Set `--speed_unit="mph"` to display miles per hour instead. The default is
-`kmh`.
+Speed is hidden unless `--speed_unit` is provided. Use `kmh` or `mph` for one
+row, or an ordered pair such as `kmh,mph` or `mph,kmh` for two stacked rows.
 
 ## Privacy
 

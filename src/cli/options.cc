@@ -7,6 +7,7 @@
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
 
 ABSL_FLAG(std::string, input, "", "Path to the input GoPro MP4 file");
 ABSL_FLAG(bool, inspect, false, "Inspect the embedded GoPro metadata");
@@ -33,6 +34,8 @@ ABSL_FLAG(double, duration_seconds, 0.0,
 ABSL_FLAG(double, render_fps, 30.0, "Debug overlay frame rate");
 ABSL_FLAG(int, render_width, 1920, "Debug overlay width in pixels");
 ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
+ABSL_FLAG(std::string, speed_unit, "kmh",
+          "Displayed speed unit: kmh or mph");
 
 namespace racevideo {
 
@@ -58,6 +61,16 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   const double render_fps = absl::GetFlag(FLAGS_render_fps);
   const int render_width = absl::GetFlag(FLAGS_render_width);
   const int render_height = absl::GetFlag(FLAGS_render_height);
+  std::string speed_unit_name = absl::GetFlag(FLAGS_speed_unit);
+  absl::AsciiStrToLower(&speed_unit_name);
+  SpeedUnit speed_unit;
+  if (speed_unit_name == "kmh") {
+    speed_unit = SpeedUnit::kKilometersPerHour;
+  } else if (speed_unit_name == "mph") {
+    speed_unit = SpeedUnit::kMilesPerHour;
+  } else {
+    return absl::InvalidArgumentError("--speed_unit must be kmh or mph");
+  }
   if (!render_frames.empty()) {
     if (!std::isfinite(start_seconds) || start_seconds < 0.0 ||
         !std::isfinite(duration_seconds) || duration_seconds <= 0.0 ||
@@ -114,7 +127,8 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .duration_seconds = duration_seconds,
                  .render_fps = render_fps,
                  .render_width = render_width,
-                 .render_height = render_height};
+                 .render_height = render_height,
+                 .speed_unit = speed_unit};
 }
 
 }  // namespace racevideo

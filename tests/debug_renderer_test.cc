@@ -1,5 +1,6 @@
 #include "renderer/debug_renderer.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -90,7 +91,8 @@ TEST(RenderOverlayFrameRgbaTest, ReturnsOneTransparentRgbaImage) {
   ASSERT_TRUE(overlay.ok()) << overlay.status();
 
   const absl::StatusOr<std::vector<std::uint8_t>> pixels =
-      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, 320, 180);
+      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, 320, 180,
+                             SpeedUnit::kKilometersPerHour);
 
   ASSERT_TRUE(pixels.ok()) << pixels.status();
   ASSERT_EQ(pixels->size(), 320u * 180u * 4u);
@@ -102,6 +104,55 @@ TEST(RenderOverlayFrameRgbaTest, ReturnsOneTransparentRgbaImage) {
   }
   EXPECT_TRUE(has_transparent_pixel);
   EXPECT_TRUE(has_visible_pixel);
+}
+
+TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
+  TelemetryData telemetry;
+  telemetry.gps = {
+      {.timestamp = absl::Seconds(0),
+       .value = {.latitude_degrees = 30.0,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 1000}},
+      {.timestamp = absl::Seconds(1),
+       .value = {.latitude_degrees = 30.001,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 1000}}};
+  telemetry.filtered_g_force = {
+      {.timestamp = absl::Seconds(0), .value = {}},
+      {.timestamp = absl::Seconds(1), .value = {}}};
+  const absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+  ASSERT_TRUE(overlay.ok()) << overlay.status();
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 180;
+
+  const absl::StatusOr<std::vector<std::uint8_t>> pixels =
+      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, kWidth, kHeight,
+                             SpeedUnit::kMilesPerHour);
+
+  ASSERT_TRUE(pixels.ok()) << pixels.status();
+  // At 180p, the renderer uses a 3-pixel digit stroke and a 16-pixel margin.
+  // "999 MPH" produces an 86-pixel-wide panel, whose right border is x=101.
+  constexpr int kPanelLeft = 16;
+  constexpr int kPanelTop = 16;
+  constexpr int kPanelHeight = 27;
+  constexpr int kRightBorderX = 101;
+  int rightmost_text_x = -1;
+  for (int y = kPanelTop + 1; y < kPanelTop + kPanelHeight - 1; ++y) {
+    for (int x = kPanelLeft + 1; x < kRightBorderX; ++x) {
+      const std::size_t alpha_index =
+          (static_cast<std::size_t>(y) * kWidth + x) * 4 + 3;
+      const std::uint8_t red = (*pixels)[alpha_index - 3];
+      // The muted MPH glyph is more opaque and brighter than the panel, but
+      // darker than the white number and border.
+      if ((*pixels)[alpha_index] > 240 && red > 100 && red < 200) {
+        rightmost_text_x = std::max(rightmost_text_x, x);
+      }
+    }
+  }
+  ASSERT_GE(rightmost_text_x, 0);
+  constexpr int kRequiredRightPaddingPixels = 4;
+  EXPECT_GE(kRightBorderX - rightmost_text_x - 1,
+            kRequiredRightPaddingPixels);
 }
 
 }  // namespace

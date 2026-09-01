@@ -57,7 +57,7 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
           options.start_seconds + frame_index / video.frames_per_second;
       absl::StatusOr<std::vector<std::uint8_t>> pixels =
           RenderOverlayFrameRgba(telemetry, overlay, timestamp, video.width,
-                                 video.height);
+                                 video.height, options.speed_unit);
       if (!pixels.ok()) return pixels.status();
       const absl::Status status = sink(std::span<const std::uint8_t>(*pixels));
       if (!status.ok()) return status;

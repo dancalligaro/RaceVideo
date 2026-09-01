@@ -5,6 +5,7 @@
 #include <string>
 
 #include "absl/status/statusor.h"
+#include "overlay/display_options.h"
 
 namespace racevideo {
 
@@ -24,6 +25,7 @@ struct Options {
   double render_fps = 30.0;
   int render_width = 1920;
   int render_height = 1080;
+  SpeedUnit speed_unit = SpeedUnit::kKilometersPerHour;
 };
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]);

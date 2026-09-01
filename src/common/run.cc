@@ -263,7 +263,8 @@ absl::Status Run(const Options& options) {
          .duration_seconds = actual_duration,
          .frames_per_second = options.render_fps,
          .width = options.render_width,
-         .height = options.render_height});
+         .height = options.render_height,
+         .speed_unit = options.speed_unit});
     if (!status.ok()) return status;
     std::cout << "Debug overlay frames written to: "
               << options.render_frames_path.string() << '\n';
@@ -312,7 +313,8 @@ absl::Status Run(const Options& options) {
         {.input_path = options.input_path,
          .output_path = options.output_video_path,
          .start_seconds = options.start_seconds,
-         .duration_seconds = actual_duration});
+         .duration_seconds = actual_duration,
+         .speed_unit = options.speed_unit});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "
               << options.output_video_path.string() << '\n';

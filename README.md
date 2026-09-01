@@ -140,7 +140,7 @@ files:
 ```powershell
 racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
   --output_video="video-overlay.mp4" --start_seconds=60 `
-  --duration_seconds=10
+  --duration_seconds=10 --speed_unit="kmh"
 ```
 
 RaceVideo streams transparent RGBA frames to the separately installed FFmpeg
@@ -148,6 +148,8 @@ process. FFmpeg composites them over the source, encodes H.264 video, and copies
 the original audio stream. Omit `--duration_seconds` (or set it to zero) to
 render from the requested start time through the remainder of the video.
 Existing output files are never overwritten.
+Set `--speed_unit="mph"` to display miles per hour instead. The default is
+`kmh`.
 
 ## Privacy
 

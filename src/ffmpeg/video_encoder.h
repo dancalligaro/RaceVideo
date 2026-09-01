@@ -5,6 +5,7 @@
 
 #include "absl/status/status.h"
 #include "ffmpeg/video_probe.h"
+#include "overlay/display_options.h"
 #include "overlay/overlay_data.h"
 #include "telemetry/telemetry.h"
 
@@ -15,6 +16,7 @@ struct VideoEncodeOptions {
   std::filesystem::path output_path;
   double start_seconds;
   double duration_seconds;
+  SpeedUnit speed_unit;
 };
 
 absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,

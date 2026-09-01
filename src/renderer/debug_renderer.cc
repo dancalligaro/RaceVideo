@@ -204,15 +204,9 @@ void DrawNumber(Canvas& canvas, int value, int x, int y, int size,
 void DrawTrack(Canvas& canvas, const OverlayData& overlay,
                std::size_t explored, int x, int y, int size) {
   DrawPanel(canvas, x, y, size, size);
-  const int text_scale = std::max(1, size / 150);
-  DrawText(canvas, "TRACK", x + size / 18, y + size / 22, text_scale, kWhite);
-  canvas.Line(x + size / 2, y + size / 14, x + size / 2 + size / 12,
-              y + size / 14, std::max(2, size / 100), kBlue);
-  DrawText(canvas, "DRIVEN", x + size / 2 + size / 10,
-           y + size / 22, text_scale, kMuted);
   const int padding = size / 14;
   const int plot_x = x + padding;
-  const int plot_y = y + size / 7;
+  const int plot_y = y + padding;
   const int plot_size = size - padding * 2;
   auto point = [&](std::size_t index) {
     return std::pair{
@@ -316,7 +310,7 @@ absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
 
 absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
     const TelemetryData& telemetry, const OverlayData& overlay,
-    double timestamp_seconds, int width, int height) {
+    double timestamp_seconds, int width, int height, SpeedUnit speed_unit) {
   if (!std::isfinite(timestamp_seconds) || timestamp_seconds < 0.0 ||
       width < 160 || height < 90 || width > 7680 || height > 4320) {
     return absl::InvalidArgumentError(
@@ -338,8 +332,6 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   const int compass_x = margin;
   DrawPanel(canvas, compass_x, panel_y, panel_width, panel_height);
   const int label_scale = std::max(1, height / 360);
-  DrawText(canvas, "COMPASS", compass_x + margin / 2,
-           panel_y + margin / 2, label_scale, kMuted);
   DrawCompass(canvas, frame->heading_degrees, compass_x + panel_width / 2,
               panel_y + margin * 2 + dial_radius, dial_radius);
   std::ostringstream heading;
@@ -351,8 +343,6 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
 
   const int g_panel_x = compass_x + panel_width + margin;
   DrawPanel(canvas, g_panel_x, panel_y, panel_width, panel_height);
-  DrawText(canvas, "G FORCE", g_panel_x + margin / 2,
-           panel_y + margin / 2, label_scale, kMuted);
   DrawGForce(canvas, frame->g_force, g_panel_x + panel_width / 2,
              panel_y + margin * 2 + dial_radius, dial_radius);
   const std::string lateral_g =
@@ -365,17 +355,25 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
                    panel_y + panel_height - margin, label_scale, kWhite);
 
   const int digit_size = std::max(3, height / 90);
-  const int speed = static_cast<int>(std::lround(
-      frame->speed_meters_per_second * 3.6));
-  const int speed_width = digit_size * 23;
-  const int speed_height = digit_size * 14;
+  const double speed_factor =
+      speed_unit == SpeedUnit::kMilesPerHour ? 2.2369362920544 : 3.6;
+  const int speed = static_cast<int>(std::lround(std::clamp(
+      frame->speed_meters_per_second * speed_factor, 0.0, 999.0)));
+  const std::string speed_text = std::to_string(std::max(0, speed));
+  const std::string_view unit =
+      speed_unit == SpeedUnit::kMilesPerHour ? "MPH" : "KMH";
+  const int unit_scale = std::max(1, digit_size / 2);
+  const int speed_padding = digit_size * 2;
+  const int number_width = static_cast<int>(speed_text.size()) * digit_size * 6;
+  const int speed_width = speed_padding * 2 + number_width + digit_size +
+                          TextWidth(unit, unit_scale);
+  const int speed_height = digit_size * 9;
   DrawPanel(canvas, margin, margin, speed_width, speed_height);
-  DrawText(canvas, "SPEED", margin + digit_size * 2, margin + digit_size,
-           std::max(1, digit_size / 2), kMuted);
-  DrawNumber(canvas, speed, margin + digit_size * 2,
-             margin + digit_size * 4, digit_size, kWhite);
-  DrawText(canvas, "KMH", margin + digit_size * 16,
-           margin + digit_size * 9, std::max(1, digit_size / 2), kMuted);
+  DrawNumber(canvas, speed, margin + speed_padding, margin + digit_size,
+             digit_size, kWhite);
+  const int unit_x = margin + speed_padding + number_width + digit_size;
+  const int unit_y = margin + (speed_height - 7 * unit_scale) / 2;
+  DrawText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
   return canvas.TakePixels();
 }
 
@@ -404,7 +402,7 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
                            frame_index / options.frames_per_second;
     absl::StatusOr<std::vector<std::uint8_t>> pixels =
         RenderOverlayFrameRgba(telemetry, overlay, seconds, options.width,
-                               options.height);
+                               options.height, options.speed_unit);
     if (!pixels.ok()) return pixels.status();
     Canvas canvas(options.width, options.height);
     std::copy(pixels->begin(), pixels->end(),

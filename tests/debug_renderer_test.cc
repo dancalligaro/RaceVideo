@@ -155,5 +155,104 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
             kRequiredRightPaddingPixels);
 }
 
+TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 180;
+  constexpr double kMetersPerSecondToMilesPerHour = 2.2369362920544;
+  auto render_mph = [&](int mph) {
+    const double meters_per_second =
+        static_cast<double>(mph) / kMetersPerSecondToMilesPerHour;
+    TelemetryData telemetry;
+    telemetry.gps = {
+        {.timestamp = absl::Seconds(0),
+         .value = {.latitude_degrees = 30.0,
+                   .longitude_degrees = -97.0,
+                   .ground_speed_meters_per_second = meters_per_second}},
+        {.timestamp = absl::Seconds(1),
+         .value = {.latitude_degrees = 30.001,
+                   .longitude_degrees = -97.0,
+                   .ground_speed_meters_per_second = meters_per_second}}};
+    telemetry.filtered_g_force = {
+        {.timestamp = absl::Seconds(0), .value = {}},
+        {.timestamp = absl::Seconds(1), .value = {}}};
+    absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+    if (!overlay.ok()) {
+      return absl::StatusOr<std::vector<std::uint8_t>>(overlay.status());
+    }
+    return RenderOverlayFrameRgba(telemetry, *overlay, 0.5, kWidth, kHeight,
+                                  SpeedUnit::kMilesPerHour);
+  };
+  const absl::StatusOr<std::vector<std::uint8_t>> one_digit = render_mph(9);
+  const absl::StatusOr<std::vector<std::uint8_t>> two_digits = render_mph(99);
+  const absl::StatusOr<std::vector<std::uint8_t>> three_digits =
+      render_mph(999);
+  ASSERT_TRUE(one_digit.ok()) << one_digit.status();
+  ASSERT_TRUE(two_digits.ok()) << two_digits.status();
+  ASSERT_TRUE(three_digits.ok()) << three_digits.status();
+
+  auto rightmost_number_x = [&](const std::vector<std::uint8_t>& pixels) {
+    int result = -1;
+    // Inspect only the number field, excluding its panel border and MPH text.
+    for (int y = 17; y < 42; ++y) {
+      for (int x = 17; x < 78; ++x) {
+        const std::size_t red_index =
+            (static_cast<std::size_t>(y) * kWidth + x) * 4;
+        if (pixels[red_index] > 220 && pixels[red_index + 3] > 240) {
+          result = std::max(result, x);
+        }
+      }
+    }
+    return result;
+  };
+  const int one_digit_right = rightmost_number_x(*one_digit);
+  const int two_digit_right = rightmost_number_x(*two_digits);
+  const int three_digit_right = rightmost_number_x(*three_digits);
+  ASSERT_GE(one_digit_right, 0);
+  EXPECT_EQ(one_digit_right, two_digit_right);
+  EXPECT_EQ(two_digit_right, three_digit_right);
+}
+
+TEST(RenderOverlayFrameRgbaTest,
+     DrawsNarrowBlueRouteOverThickWhiteTrackWithoutPanel) {
+  TelemetryData telemetry;
+  telemetry.gps = {
+      {.timestamp = absl::Seconds(0),
+       .value = {.latitude_degrees = 30.0,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 10}},
+      {.timestamp = absl::Seconds(1),
+       .value = {.latitude_degrees = 30.001,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 10}}};
+  telemetry.filtered_g_force = {
+      {.timestamp = absl::Seconds(0), .value = {}},
+      {.timestamp = absl::Seconds(1), .value = {}}};
+  const absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+  ASSERT_TRUE(overlay.ok()) << overlay.status();
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 180;
+
+  const absl::StatusOr<std::vector<std::uint8_t>> pixels =
+      RenderOverlayFrameRgba(telemetry, *overlay, 1.0, kWidth, kHeight,
+                             SpeedUnit::kKilometersPerHour);
+
+  ASSERT_TRUE(pixels.ok()) << pixels.status();
+  auto pixel = [&](int x, int y, int component) {
+    return (*pixels)[(static_cast<std::size_t>(y) * kWidth + x) * 4 +
+                     component];
+  };
+  // The 75x75 track region begins at (229, 16). Its unused corner remains
+  // transparent because there is no track panel.
+  EXPECT_EQ(pixel(229, 16, 3), 0);
+  // The vertical test route is centered at x=266. Blue occupies its narrow
+  // center, while the thicker white base remains visible at the edge.
+  EXPECT_EQ(pixel(266, 53, 0), 30);
+  EXPECT_EQ(pixel(266, 53, 1), 145);
+  EXPECT_EQ(pixel(266, 53, 2), 255);
+  EXPECT_EQ(pixel(268, 53, 0), 230);
+  EXPECT_EQ(pixel(268, 53, 1), 230);
+  EXPECT_EQ(pixel(268, 53, 2), 230);
+}
+
 }  // namespace
 }  // namespace racevideo

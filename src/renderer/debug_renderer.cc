@@ -203,7 +203,6 @@ void DrawNumber(Canvas& canvas, int value, int x, int y, int size,
 
 void DrawTrack(Canvas& canvas, const OverlayData& overlay,
                std::size_t explored, int x, int y, int size) {
-  DrawPanel(canvas, x, y, size, size);
   const int padding = size / 14;
   const int plot_x = x + padding;
   const int plot_y = y + padding;
@@ -216,13 +215,13 @@ void DrawTrack(Canvas& canvas, const OverlayData& overlay,
   for (std::size_t i = 1; i < overlay.track.size(); ++i) {
     const auto [x0, y0] = point(i - 1);
     const auto [x1, y1] = point(i);
-    canvas.Line(x0, y0, x1, y1, std::max(2, size / 100), kWhite);
+    canvas.Line(x0, y0, x1, y1, std::max(5, size / 35), kWhite);
   }
   const std::size_t end = std::min(explored, overlay.track.size());
   for (std::size_t i = 1; i < end; ++i) {
     const auto [x0, y0] = point(i - 1);
     const auto [x1, y1] = point(i);
-    canvas.Line(x0, y0, x1, y1, std::max(3, size / 80), kBlue);
+    canvas.Line(x0, y0, x1, y1, std::max(3, size / 70), kBlue);
   }
   if (end > 0) {
     const auto [px, py] = point(end - 1);
@@ -322,7 +321,8 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
 
   Canvas canvas(width, height);
   const int margin = std::max(16, height / 40);
-  const int track_size = std::min(width / 3, height * 5 / 9);
+  const int track_size =
+      std::min(width / 3, height * 5 / 9) * 3 / 4;
   DrawTrack(canvas, overlay, frame->explored_track_point_count,
             width - track_size - margin, margin, track_size);
   const int dial_radius = std::max(38, height / 11);
@@ -364,13 +364,17 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
       speed_unit == SpeedUnit::kMilesPerHour ? "MPH" : "KMH";
   const int unit_scale = std::max(1, digit_size / 2);
   const int speed_padding = digit_size * 2;
-  const int number_width = static_cast<int>(speed_text.size()) * digit_size * 6;
+  constexpr int kSpeedDigits = 3;
+  const int digit_advance = digit_size * 6;
+  const int number_width = kSpeedDigits * digit_advance;
   const int speed_width = speed_padding * 2 + number_width + digit_size +
                           TextWidth(unit, unit_scale);
   const int speed_height = digit_size * 9;
   DrawPanel(canvas, margin, margin, speed_width, speed_height);
-  DrawNumber(canvas, speed, margin + speed_padding, margin + digit_size,
-             digit_size, kWhite);
+  const int number_x = margin + speed_padding +
+                       (kSpeedDigits - static_cast<int>(speed_text.size())) *
+                           digit_advance;
+  DrawNumber(canvas, speed, number_x, margin + digit_size, digit_size, kWhite);
   const int unit_x = margin + speed_padding + number_width + digit_size;
   const int unit_y = margin + (speed_height - 7 * unit_scale) / 2;
   DrawText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);

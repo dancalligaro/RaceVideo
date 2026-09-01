@@ -1,15 +1,18 @@
 #include "ffmpeg/video_encoder.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <span>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -30,6 +33,55 @@ std::string PathAsUtf8(const std::filesystem::path& path) {
 
 std::string Number(double value) {
   return absl::StrCat(value);
+}
+
+std::string FfconcatPath(const std::filesystem::path& path) {
+  std::string value = PathAsUtf8(std::filesystem::absolute(path));
+  std::replace(value.begin(), value.end(), '\\', '/');
+  std::string escaped;
+  escaped.reserve(value.size() + 2);
+  escaped.push_back('\'');
+  for (char character : value) {
+    if (character == '\'') {
+      escaped.append("'\\''");
+    } else {
+      escaped.push_back(character);
+    }
+  }
+  escaped.push_back('\'');
+  return escaped;
+}
+
+absl::StatusOr<std::filesystem::path> WriteConcatManifest(
+    const std::vector<VideoChapter>& chapters) {
+  std::error_code error;
+  const std::filesystem::path temporary_directory =
+      std::filesystem::temp_directory_path(error);
+  if (error) {
+    return absl::UnknownError(
+        absl::StrCat("cannot locate temporary directory: ", error.message()));
+  }
+  const auto identifier =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path manifest =
+      temporary_directory /
+      absl::StrCat("racevideo-chapters-", identifier, ".ffconcat");
+  std::ofstream output(manifest, std::ios::binary);
+  if (!output) {
+    return absl::UnknownError(
+        absl::StrCat("cannot create concat manifest: ", manifest.string()));
+  }
+  output << "ffconcat version 1.0\n";
+  for (const VideoChapter& chapter : chapters) {
+    output << "file " << FfconcatPath(chapter.path) << '\n'
+           << "duration " << Number(chapter.duration_seconds) << '\n';
+  }
+  output.close();
+  if (!output) {
+    std::filesystem::remove(manifest, error);
+    return absl::UnknownError("cannot write concat manifest");
+  }
+  return manifest;
 }
 
 struct RenderedFrameSlot {
@@ -179,6 +231,9 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
   absl::StatusOr<std::filesystem::path> ffmpeg =
       FindExecutableOnPath("ffmpeg");
   if (!ffmpeg.ok()) return ffmpeg.status();
+  if (options.chapters.empty()) {
+    return absl::InvalidArgumentError("at least one video chapter is required");
+  }
 
   absl::StatusOr<VideoDimensions> output_dimensions =
       DetermineOutputDimensions(video, options.output_width);
@@ -205,13 +260,26 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
                          ":flags=fast_bilinear[base];"
                          "[base][1:v:0]overlay=0:0:format=auto[v]")
           : "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
+  std::filesystem::path concat_manifest;
   std::vector<std::string> arguments = {
       "-hide_banner", "-loglevel", "error", "-nostdin", "-ss",
-      Number(options.start_seconds), "-t", Number(options.duration_seconds),
-      "-i", PathAsUtf8(options.input_path), "-f", "rawvideo", "-pixel_format",
-      "rgba", "-video_size", dimensions, "-framerate",
+      Number(options.start_seconds), "-t", Number(options.duration_seconds)};
+  if (options.chapters.size() == 1) {
+    arguments.insert(arguments.end(),
+                     {"-i", PathAsUtf8(options.chapters.front().path)});
+  } else {
+    absl::StatusOr<std::filesystem::path> manifest =
+        WriteConcatManifest(options.chapters);
+    if (!manifest.ok()) return manifest.status();
+    concat_manifest = *manifest;
+    arguments.insert(arguments.end(),
+                     {"-f", "concat", "-safe", "0", "-i",
+                      PathAsUtf8(concat_manifest)});
+  }
+  arguments.insert(arguments.end(), {
+      "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", dimensions, "-framerate",
       Number(video.frames_per_second), "-i", "pipe:0", "-filter_complex",
-      filter, "-map", "[v]", "-map", "0:a?"};
+      filter, "-map", "[v]", "-map", "0:a?"});
   if (options.video_encoder == VideoEncoder::kNvidia) {
     arguments.insert(arguments.end(),
                      {"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
@@ -237,6 +305,10 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
   };
   absl::StatusOr<ProcessResult> process =
       RunProcessWithInput(*ffmpeg, arguments, producer);
+  if (!concat_manifest.empty()) {
+    std::error_code remove_error;
+    std::filesystem::remove(concat_manifest, remove_error);
+  }
   if (!process.ok()) return process.status();
   if (process->exit_code != 0) {
     return absl::UnknownError(absl::StrCat(

@@ -20,8 +20,13 @@ struct VideoDimensions {
   bool operator==(const VideoDimensions&) const = default;
 };
 
+struct VideoChapter {
+  std::filesystem::path path;
+  double duration_seconds;
+};
+
 struct VideoEncodeOptions {
-  std::filesystem::path input_path;
+  std::vector<VideoChapter> chapters;
   std::filesystem::path output_path;
   double start_seconds;
   double duration_seconds;

@@ -182,6 +182,34 @@ During encoding it reports frame progress as a percentage. After a successful
 run it prints elapsed wall-clock time as both total seconds and minutes plus
 seconds, making preview and encoder performance easy to compare.
 
+### Sequential GoPro chapters
+
+RaceVideo can treat several consecutive GoPro chapter files as one continuous
+recording. Create a text file containing one video path per line, in playback
+order:
+
+```text
+GX010001.MP4
+GX020001.MP4
+GX030001.MP4
+```
+
+Blank lines are ignored. Relative paths are resolved from the directory that
+contains the list file. Then pass the list instead of `--input`:
+
+```powershell
+racevideo.exe --input_list="chapters.txt" --imu_axis_order="ZXY" `
+  --output_video="complete-drive.mp4" --speed_unit="kmh,mph"
+```
+
+RaceVideo validates that the chapters have matching video and audio stream
+properties before rendering. It combines their telemetry and durations into a
+single timeline, so `--start_seconds` and `--duration_seconds` apply to the
+complete recording and the track represents the selected range across all
+chapters. FFmpeg reads the source chapters directly through its concat demuxer;
+RaceVideo does not create an intermediate joined video. The input files remain
+unchanged.
+
 ## Privacy
 
 GoPro metadata can contain precise GPS locations, timestamps, device details,

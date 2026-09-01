@@ -46,6 +46,8 @@ add_library(racevideo_core
   src/cli/options.h
   src/common/run.cc
   src/common/run.h
+  src/common/input_list.cc
+  src/common/input_list.h
   src/ffmpeg/process.cc
   src/ffmpeg/process.h
   src/ffmpeg/video_probe.cc
@@ -107,6 +109,7 @@ if(RACEVIDEO_BUILD_TESTS)
     tests/gpmf_metadata_test.cc
     tests/g_force_test.cc
     tests/gps_statistics_test.cc
+    tests/input_list_test.cc
     tests/mount_orientation_test.cc
     tests/overlay_data_test.cc
     tests/mp4_gpmf_test.cc

@@ -11,6 +11,8 @@
 #include "absl/strings/ascii.h"
 
 ABSL_FLAG(std::string, input, "", "Path to the input GoPro MP4 file");
+ABSL_FLAG(std::string, input_list, "",
+          "Path to an ordered list of sequential GoPro MP4 files");
 ABSL_FLAG(bool, inspect, false, "Inspect the embedded GoPro metadata");
 ABSL_FLAG(bool, inspect_video, false,
           "Inspect video and audio streams using external ffprobe");
@@ -82,15 +84,24 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   }
 
   const std::string input = absl::GetFlag(FLAGS_input);
+  const std::string input_list = absl::GetFlag(FLAGS_input_list);
   const std::string inspect_telemetry =
       absl::GetFlag(FLAGS_inspect_telemetry);
-  if (input.empty() == inspect_telemetry.empty()) {
+  const int media_input_count = static_cast<int>(!input.empty()) +
+                                static_cast<int>(!input_list.empty());
+  if ((!inspect_telemetry.empty() && media_input_count != 0) ||
+      (inspect_telemetry.empty() && media_input_count != 1)) {
     return absl::InvalidArgumentError(
-        "specify exactly one of --input or --inspect_telemetry");
+        "specify exactly one of --input, --input_list, or "
+        "--inspect_telemetry");
   }
 
   const std::string render_frames = absl::GetFlag(FLAGS_render_frames);
   const std::string output_video = absl::GetFlag(FLAGS_output_video);
+  if (!input_list.empty() && render_frames.empty() && output_video.empty()) {
+    return absl::InvalidArgumentError(
+        "--input_list requires --render_frames or --output_video");
+  }
   const double start_seconds = absl::GetFlag(FLAGS_start_seconds);
   const double duration_seconds = absl::GetFlag(FLAGS_duration_seconds);
   const double render_fps = absl::GetFlag(FLAGS_render_fps);
@@ -121,15 +132,15 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
       return absl::InvalidArgumentError(
           "debug render is limited to 10000 frames per invocation");
     }
-    if (input.empty()) {
+    if (media_input_count == 0) {
       return absl::InvalidArgumentError(
-          "--render_frames requires an MP4 --input");
+          "--render_frames requires --input or --input_list");
     }
   }
   if (!output_video.empty()) {
-    if (input.empty()) {
+    if (media_input_count == 0) {
       return absl::InvalidArgumentError(
-          "--output_video requires an MP4 --input");
+          "--output_video requires --input or --input_list");
     }
     if (!std::isfinite(start_seconds) || start_seconds < 0.0 ||
         !std::isfinite(duration_seconds) || duration_seconds < 0.0) {
@@ -150,6 +161,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   }
 
   return Options{.input_path = input,
+                 .input_list_path = input_list,
                  .inspect = absl::GetFlag(FLAGS_inspect),
                  .inspect_video = absl::GetFlag(FLAGS_inspect_video),
                  .extract_gpmf_path = absl::GetFlag(FLAGS_extract_gpmf),

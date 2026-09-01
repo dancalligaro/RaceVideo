@@ -6,9 +6,11 @@
 #include <iostream>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "common/input_list.h"
 #include "ffmpeg/video_encoder.h"
 #include "ffmpeg/video_probe.h"
 #include "parser/gpmf_metadata.h"
@@ -36,6 +38,191 @@ std::string FormatDuration(double total_seconds) {
          << " seconds (" << minutes << " minutes " << seconds
          << " seconds)";
   return output.str();
+}
+
+absl::Status ValidateInputFile(const std::filesystem::path& path) {
+  std::error_code error;
+  if (!std::filesystem::exists(path, error)) {
+    if (error) {
+      return absl::UnknownError(absl::StrCat(
+          "cannot inspect input path: ", path.string(), ": ", error.message()));
+    }
+    return absl::NotFoundError(
+        absl::StrCat("input file not found: ", path.string()));
+  }
+  if (!std::filesystem::is_regular_file(path, error) || error) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("input is not a regular file: ", path.string()));
+  }
+  return absl::OkStatus();
+}
+
+template <typename Value>
+absl::Status AppendSamples(const std::vector<TimedSample<Value>>& source,
+                           absl::Duration offset,
+                           absl::Duration chapter_duration,
+                           std::vector<TimedSample<Value>>* destination) {
+  for (const TimedSample<Value>& sample : source) {
+    if (sample.timestamp < absl::ZeroDuration() ||
+        sample.timestamp > chapter_duration) {
+      continue;
+    }
+    TimedSample<Value> adjusted = sample;
+    adjusted.timestamp += offset;
+    if (!destination->empty() &&
+        adjusted.timestamp <= destination->back().timestamp) {
+      if (adjusted.timestamp == destination->back().timestamp) continue;
+      return absl::DataLossError(
+          "chapter telemetry timestamps are not increasing");
+    }
+    destination->push_back(adjusted);
+  }
+  return absl::OkStatus();
+}
+
+struct CombinedChapters {
+  std::vector<VideoChapter> chapters;
+  VideoInfo video;
+  TelemetryData telemetry;
+};
+
+absl::StatusOr<CombinedChapters> PrepareChapters(
+    const std::vector<std::filesystem::path>& paths,
+    std::string_view imu_axis_order) {
+  CombinedChapters combined;
+  double timeline_seconds = 0.0;
+  for (std::size_t index = 0; index < paths.size(); ++index) {
+    const std::filesystem::path& path = paths[index];
+    absl::Status status = ValidateInputFile(path);
+    if (!status.ok()) return status;
+    absl::StatusOr<VideoInfo> video = ProbeVideo(path);
+    if (!video.ok()) return video.status();
+    if (index == 0) {
+      combined.video = *video;
+    } else {
+      status = ValidateCompatibleVideo(combined.video, *video);
+      if (!status.ok()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            path.string(), ": ", status.message()));
+      }
+    }
+    absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(path);
+    if (!track.ok()) return track.status();
+    absl::StatusOr<TelemetryData> telemetry = DecodeTelemetry(path, *track);
+    if (!telemetry.ok()) return telemetry.status();
+    status = NormalizeInertialAxes(imu_axis_order, &*telemetry);
+    if (!status.ok()) return status;
+    status = DetectAndApplyMountOrientation(&*telemetry);
+    if (!status.ok()) return status;
+    status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
+    if (!status.ok()) return status;
+    if (index == 0) {
+      combined.telemetry.acceleration_metadata =
+          telemetry->acceleration_metadata;
+      combined.telemetry.angular_velocity_metadata =
+          telemetry->angular_velocity_metadata;
+      combined.telemetry.g_force_filter_cutoff_hz =
+          telemetry->g_force_filter_cutoff_hz;
+    } else if (telemetry->acceleration_metadata.mount_orientation !=
+               combined.telemetry.acceleration_metadata.mount_orientation) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          path.string(), ": detected mount orientation differs from the "
+                         "first chapter"));
+    }
+    const absl::Duration offset = absl::Seconds(timeline_seconds);
+    const absl::Duration chapter_duration =
+        absl::Seconds(video->duration_seconds);
+    status = AppendSamples(telemetry->gps, offset, chapter_duration,
+                           &combined.telemetry.gps);
+    if (!status.ok()) return status;
+    status = AppendSamples(
+        telemetry->acceleration_meters_per_second_squared, offset,
+        chapter_duration,
+        &combined.telemetry.acceleration_meters_per_second_squared);
+    if (!status.ok()) return status;
+    status = AppendSamples(telemetry->angular_velocity_radians_per_second,
+                           offset, chapter_duration,
+                           &combined.telemetry
+                                .angular_velocity_radians_per_second);
+    if (!status.ok()) return status;
+    status = AppendSamples(telemetry->filtered_g_force, offset,
+                           chapter_duration,
+                           &combined.telemetry.filtered_g_force);
+    if (!status.ok()) return status;
+    combined.chapters.push_back(
+        {.path = path, .duration_seconds = video->duration_seconds});
+    timeline_seconds += video->duration_seconds;
+  }
+  combined.video.duration_seconds = timeline_seconds;
+  return combined;
+}
+
+absl::Status RunChapterList(const Options& options) {
+  absl::StatusOr<std::vector<std::filesystem::path>> paths =
+      ReadInputList(options.input_list_path);
+  if (!paths.ok()) return paths.status();
+  absl::StatusOr<CombinedChapters> combined =
+      PrepareChapters(*paths, options.imu_axis_order);
+  if (!combined.ok()) return combined.status();
+  if (options.start_seconds >= combined->video.duration_seconds) {
+    return absl::OutOfRangeError(
+        "start is at or beyond the combined video duration");
+  }
+  const double available_duration =
+      combined->video.duration_seconds - options.start_seconds;
+  const double actual_duration =
+      options.duration_seconds == 0.0
+          ? available_duration
+          : std::min(options.duration_seconds, available_duration);
+  std::cout << "Input chapters: " << combined->chapters.size() << '\n'
+            << "Combined input duration: "
+            << FormatDuration(combined->video.duration_seconds) << '\n'
+            << "Selected output duration: " << FormatDuration(actual_duration)
+            << '\n';
+  absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+      combined->telemetry, absl::Seconds(options.start_seconds),
+      absl::Seconds(options.start_seconds + actual_duration));
+  if (!overlay.ok()) return overlay.status();
+
+  if (!options.render_frames_path.empty()) {
+    absl::Status status = RenderDebugFrames(
+        combined->telemetry, *overlay,
+        {.output_directory = options.render_frames_path,
+         .start_seconds = options.start_seconds,
+         .duration_seconds = actual_duration,
+         .frames_per_second = options.render_fps,
+         .width = options.render_width,
+         .height = options.render_height,
+         .speed_units = options.speed_units});
+    if (!status.ok()) return status;
+    std::cout << "Debug overlay frames written to: "
+              << options.render_frames_path.string() << '\n';
+  }
+  if (!options.output_video_path.empty()) {
+    std::error_code error;
+    if (std::filesystem::exists(options.output_video_path, error)) {
+      return absl::AlreadyExistsError(absl::StrCat(
+          "refusing to overwrite output video: ",
+          options.output_video_path.string()));
+    }
+    if (error) {
+      return absl::UnknownError(absl::StrCat(
+          "cannot inspect output video path: ", error.message()));
+    }
+    absl::Status status = EncodeOverlayVideo(
+        combined->telemetry, *overlay, combined->video,
+        {.chapters = combined->chapters,
+         .output_path = options.output_video_path,
+         .start_seconds = options.start_seconds,
+         .duration_seconds = actual_duration,
+         .output_width = options.output_width,
+         .video_encoder = options.video_encoder,
+         .speed_units = options.speed_units});
+    if (!status.ok()) return status;
+    std::cout << "Overlay video written to: "
+              << options.output_video_path.string() << '\n';
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -105,6 +292,8 @@ absl::Status Run(const Options& options) {
     }
     return absl::OkStatus();
   }
+
+  if (!options.input_list_path.empty()) return RunChapterList(options);
 
   std::error_code error;
   const bool exists = std::filesystem::exists(options.input_path, error);
@@ -330,7 +519,8 @@ absl::Status Run(const Options& options) {
     if (!overlay.ok()) return overlay.status();
     status = EncodeOverlayVideo(
         *telemetry, *overlay, *video,
-        {.input_path = options.input_path,
+        {.chapters = {{.path = options.input_path,
+                       .duration_seconds = video->duration_seconds}},
          .output_path = options.output_video_path,
          .start_seconds = options.start_seconds,
          .duration_seconds = actual_duration,

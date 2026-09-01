@@ -2,8 +2,11 @@
 #define RACEVIDEO_RENDERER_DEBUG_RENDERER_H_
 
 #include <filesystem>
+#include <cstdint>
+#include <vector>
 
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "overlay/overlay_data.h"
 #include "telemetry/telemetry.h"
 
@@ -21,6 +24,10 @@ struct DebugRenderOptions {
 absl::Status RenderDebugFrames(const TelemetryData& telemetry,
                                const OverlayData& overlay,
                                const DebugRenderOptions& options);
+
+absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
+    const TelemetryData& telemetry, const OverlayData& overlay,
+    double timestamp_seconds, int width, int height);
 
 }  // namespace racevideo
 

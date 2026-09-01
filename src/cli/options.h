@@ -17,6 +17,7 @@ struct Options {
   std::filesystem::path export_telemetry_path;
   std::filesystem::path inspect_telemetry_path;
   std::filesystem::path render_frames_path;
+  std::filesystem::path output_video_path;
   std::string imu_axis_order;
   double start_seconds = 0.0;
   double duration_seconds = 0.0;

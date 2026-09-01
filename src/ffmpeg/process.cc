@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -229,6 +230,137 @@ absl::StatusOr<ProcessResult> RunProcessAndCaptureOutput(
 #else
   return absl::UnimplementedError(
       "external process execution is not implemented on this platform");
+#endif
+}
+
+absl::StatusOr<ProcessResult> RunProcessWithInput(
+    const std::filesystem::path& executable,
+    const std::vector<std::string>& arguments, const InputProducer& producer) {
+#ifdef _WIN32
+  SECURITY_ATTRIBUTES security = {.nLength = sizeof(SECURITY_ATTRIBUTES),
+                                  .lpSecurityDescriptor = nullptr,
+                                  .bInheritHandle = TRUE};
+  HANDLE raw_input_read = nullptr;
+  HANDLE raw_input_write = nullptr;
+  if (!CreatePipe(&raw_input_read, &raw_input_write, &security, 0)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot create process input pipe: ", GetLastError()));
+  }
+  Handle input_read(raw_input_read);
+  Handle input_write(raw_input_write);
+  if (!SetHandleInformation(input_write.get(), HANDLE_FLAG_INHERIT, 0)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot configure process input pipe: ", GetLastError()));
+  }
+
+  HANDLE raw_output_read = nullptr;
+  HANDLE raw_output_write = nullptr;
+  if (!CreatePipe(&raw_output_read, &raw_output_write, &security, 0)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot create process output pipe: ", GetLastError()));
+  }
+  Handle output_read(raw_output_read);
+  Handle output_write(raw_output_write);
+  if (!SetHandleInformation(output_read.get(), HANDLE_FLAG_INHERIT, 0)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot configure process output pipe: ", GetLastError()));
+  }
+
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = input_read.get();
+  startup.hStdOutput = output_write.get();
+  startup.hStdError = output_write.get();
+  PROCESS_INFORMATION process{};
+  std::wstring command_line = BuildCommandLine(executable, arguments);
+  if (!CreateProcessW(executable.c_str(), command_line.data(), nullptr, nullptr,
+                      TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                      &process)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot start ", executable.string(), ": Windows error ",
+        GetLastError()));
+  }
+  Handle process_handle(process.hProcess);
+  Handle thread_handle(process.hThread);
+  input_read.release();
+  CloseHandle(raw_input_read);
+  output_write.release();
+  CloseHandle(raw_output_write);
+
+  std::string output;
+  bool output_too_large = false;
+  DWORD output_error = ERROR_SUCCESS;
+  std::thread reader([&] {
+    std::array<char, 4096> buffer{};
+    for (;;) {
+      DWORD bytes_read = 0;
+      if (!ReadFile(output_read.get(), buffer.data(),
+                    static_cast<DWORD>(buffer.size()), &bytes_read, nullptr)) {
+        const DWORD error = GetLastError();
+        if (error != ERROR_BROKEN_PIPE) output_error = error;
+        break;
+      }
+      if (bytes_read == 0) break;
+      const std::size_t available =
+          output.size() < kMaximumCapturedOutputBytes
+              ? kMaximumCapturedOutputBytes - output.size()
+              : 0;
+      const std::size_t to_copy =
+          std::min<std::size_t>(available, bytes_read);
+      output.append(buffer.data(), to_copy);
+      if (to_copy < bytes_read) output_too_large = true;
+    }
+  });
+
+  const ByteSink sink = [&](std::span<const std::uint8_t> bytes) {
+    while (!bytes.empty()) {
+      const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+          bytes.size(), static_cast<std::size_t>(MAXDWORD)));
+      DWORD written = 0;
+      if (!WriteFile(input_write.get(), bytes.data(), chunk, &written,
+                     nullptr)) {
+        return absl::UnknownError(absl::StrCat(
+            "cannot write process input: Windows error ", GetLastError()));
+      }
+      if (written == 0) {
+        return absl::UnknownError("process input pipe accepted no bytes");
+      }
+      bytes = bytes.subspan(written);
+    }
+    return absl::OkStatus();
+  };
+  const absl::Status producer_status = producer(sink);
+  input_write.release();
+  CloseHandle(raw_input_write);
+
+  const DWORD wait_result = WaitForSingleObject(process_handle.get(), INFINITE);
+  reader.join();
+  if (wait_result != WAIT_OBJECT_0) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot wait for process: Windows error ", GetLastError()));
+  }
+  if (output_error != ERROR_SUCCESS) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot read process output: Windows error ", output_error));
+  }
+  if (output_too_large) {
+    return absl::ResourceExhaustedError(
+        "external process produced more than 1 MiB of diagnostic output");
+  }
+  DWORD exit_code = 0;
+  if (!GetExitCodeProcess(process_handle.get(), &exit_code)) {
+    return absl::UnknownError(absl::StrCat(
+        "cannot read process exit code: Windows error ", GetLastError()));
+  }
+  if (!producer_status.ok()) {
+    return absl::Status(producer_status.code(), absl::StrCat(
+        producer_status.message(), output.empty() ? "" : ": ", output));
+  }
+  return ProcessResult{.exit_code = exit_code, .output = std::move(output)};
+#else
+  return absl::UnimplementedError(
+      "external process input streaming is not implemented on this platform");
 #endif
 }
 

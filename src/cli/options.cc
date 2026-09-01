@@ -24,10 +24,12 @@ ABSL_FLAG(std::string, imu_axis_order, "",
           "Encoded IMU component order, e.g. ZXY, yXZ, or YxZ");
 ABSL_FLAG(std::string, render_frames, "",
           "Write transparent debug overlay PNGs to this folder");
+ABSL_FLAG(std::string, output_video, "",
+          "Render the telemetry overlay into an MP4 using external FFmpeg");
 ABSL_FLAG(double, start_seconds, 0.0,
           "First video timestamp to render, in seconds");
 ABSL_FLAG(double, duration_seconds, 0.0,
-          "Duration to render, in seconds (required with --render_frames)");
+          "Duration to render; zero means the remainder for --output_video");
 ABSL_FLAG(double, render_fps, 30.0, "Debug overlay frame rate");
 ABSL_FLAG(int, render_width, 1920, "Debug overlay width in pixels");
 ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
@@ -50,6 +52,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   }
 
   const std::string render_frames = absl::GetFlag(FLAGS_render_frames);
+  const std::string output_video = absl::GetFlag(FLAGS_output_video);
   const double start_seconds = absl::GetFlag(FLAGS_start_seconds);
   const double duration_seconds = absl::GetFlag(FLAGS_duration_seconds);
   const double render_fps = absl::GetFlag(FLAGS_render_fps);
@@ -78,6 +81,23 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
           "--render_frames requires an MP4 --input");
     }
   }
+  if (!output_video.empty()) {
+    if (input.empty()) {
+      return absl::InvalidArgumentError(
+          "--output_video requires an MP4 --input");
+    }
+    if (!std::isfinite(start_seconds) || start_seconds < 0.0 ||
+        !std::isfinite(duration_seconds) || duration_seconds < 0.0) {
+      return absl::InvalidArgumentError(
+          "video render range requires a nonnegative finite start and "
+          "duration");
+    }
+    if (absl::GetFlag(FLAGS_imu_axis_order).empty()) {
+      return absl::InvalidArgumentError(
+          "--output_video requires --imu_axis_order so acceleration can be "
+          "mapped to vehicle axes");
+    }
+  }
 
   return Options{.input_path = input,
                  .inspect = absl::GetFlag(FLAGS_inspect),
@@ -88,6 +108,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                      absl::GetFlag(FLAGS_export_telemetry),
                  .inspect_telemetry_path = inspect_telemetry,
                  .render_frames_path = render_frames,
+                 .output_video_path = output_video,
                  .imu_axis_order = absl::GetFlag(FLAGS_imu_axis_order),
                  .start_seconds = start_seconds,
                  .duration_seconds = duration_seconds,

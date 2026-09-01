@@ -13,11 +13,11 @@ Requirements:
 - Visual Studio 2026 with the **Desktop development with C++** workload
 - The vcpkg installation bundled with Visual Studio
 
-FFmpeg will be a separately installed runtime dependency when video rendering
-is implemented. RaceVideo does not bundle, download, install, or redistribute
-FFmpeg. Users will supply an `ffmpeg` executable through their system `PATH` or
-a future explicit configuration option. RaceVideo will invoke it as a separate
-process and communicate through standard pipes.
+FFmpeg is a separately installed runtime dependency for video rendering.
+RaceVideo does not bundle, download, install, or redistribute FFmpeg. Users
+supply the `ffmpeg` and `ffprobe` executables through their system `PATH`.
+RaceVideo invokes them as separate processes and communicates through standard
+pipes.
 
 Open **Developer PowerShell for VS 2026**, then configure and build:
 
@@ -132,8 +132,22 @@ track. The unexplored track is white, the explored portion is blue, and the
 current position is red. RaceVideo renders only the requested interval, limits
 one invocation to 10,000 frames, and refuses to overwrite existing numbered
 frames. These PNGs contain transparency and do not require FFmpeg or decode the
-video image; they are intended for inspecting the overlay layer and will later
-be composited over video by the external FFmpeg executable.
+video image; they are intended for inspecting the overlay layer.
+
+Render the overlay directly into a new MP4 without creating intermediate image
+files:
+
+```powershell
+racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
+  --output_video="video-overlay.mp4" --start_seconds=60 `
+  --duration_seconds=10
+```
+
+RaceVideo streams transparent RGBA frames to the separately installed FFmpeg
+process. FFmpeg composites them over the source, encodes H.264 video, and copies
+the original audio stream. Omit `--duration_seconds` (or set it to zero) to
+render from the requested start time through the remainder of the video.
+Existing output files are never overwritten.
 
 ## Privacy
 

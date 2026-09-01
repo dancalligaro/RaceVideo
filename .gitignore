@@ -3,3 +3,5 @@
 /.vs/
 /CMakeUserPresets.json
 debug-frames
+debug-overlay.mp4
+debug-overlay-preview.png

@@ -7,6 +7,7 @@
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "ffmpeg/video_encoder.h"
 #include "ffmpeg/video_probe.h"
 #include "parser/gpmf_metadata.h"
 #include "parser/mp4_gpmf.h"
@@ -266,6 +267,55 @@ absl::Status Run(const Options& options) {
     if (!status.ok()) return status;
     std::cout << "Debug overlay frames written to: "
               << options.render_frames_path.string() << '\n';
+  }
+  if (!options.output_video_path.empty()) {
+    std::error_code output_error;
+    if (std::filesystem::exists(options.output_video_path, output_error)) {
+      return absl::AlreadyExistsError(absl::StrCat(
+          "refusing to overwrite output video: ",
+          options.output_video_path.string()));
+    }
+    if (output_error) {
+      return absl::UnknownError(absl::StrCat(
+          "cannot inspect output video path: ", output_error.message()));
+    }
+    if (options.start_seconds >= duration_seconds) {
+      return absl::OutOfRangeError(
+          "video render start is at or beyond the metadata duration");
+    }
+    absl::StatusOr<VideoInfo> video = ProbeVideo(options.input_path);
+    if (!video.ok()) return video.status();
+    const double available_duration =
+        std::min(duration_seconds, video->duration_seconds) -
+        options.start_seconds;
+    const double actual_duration =
+        options.duration_seconds == 0.0
+            ? available_duration
+            : std::min(options.duration_seconds, available_duration);
+    if (actual_duration <= 0.0) {
+      return absl::OutOfRangeError("video render range is empty");
+    }
+    absl::StatusOr<TelemetryData> telemetry =
+        DecodeTelemetry(options.input_path, *track);
+    if (!telemetry.ok()) return telemetry.status();
+    absl::Status status =
+        NormalizeInertialAxes(options.imu_axis_order, &*telemetry);
+    if (!status.ok()) return status;
+    status = DetectAndApplyMountOrientation(&*telemetry);
+    if (!status.ok()) return status;
+    status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
+    if (!status.ok()) return status;
+    absl::StatusOr<OverlayData> overlay = BuildOverlayData(*telemetry);
+    if (!overlay.ok()) return overlay.status();
+    status = EncodeOverlayVideo(
+        *telemetry, *overlay, *video,
+        {.input_path = options.input_path,
+         .output_path = options.output_video_path,
+         .start_seconds = options.start_seconds,
+         .duration_seconds = actual_duration});
+    if (!status.ok()) return status;
+    std::cout << "Overlay video written to: "
+              << options.output_video_path.string() << '\n';
   }
   return absl::OkStatus();
 }

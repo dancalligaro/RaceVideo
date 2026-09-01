@@ -468,6 +468,11 @@ Pipe to FFmpeg
 
 Produce video
 
+The initial Windows pipeline streams full-resolution RGBA overlay frames to a
+separately installed FFmpeg process, encodes the composited result as H.264,
+and copies the source audio. No intermediate frame files or bundled FFmpeg
+binaries are required.
+
 ------------------------------------------------------------------------
 
 ## Phase 6

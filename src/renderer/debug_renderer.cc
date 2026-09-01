@@ -38,6 +38,8 @@ class Canvas {
   int width() const { return width_; }
   int height() const { return height_; }
   const uint8_t* data() const { return pixels_.data(); }
+  uint8_t* mutable_data() { return pixels_.data(); }
+  std::vector<uint8_t> TakePixels() { return std::move(pixels_); }
 
   void Pixel(int x, int y, Color color) {
     if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
@@ -312,6 +314,71 @@ absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
 
 }  // namespace
 
+absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
+    const TelemetryData& telemetry, const OverlayData& overlay,
+    double timestamp_seconds, int width, int height) {
+  if (!std::isfinite(timestamp_seconds) || timestamp_seconds < 0.0 ||
+      width < 160 || height < 90 || width > 7680 || height > 4320) {
+    return absl::InvalidArgumentError(
+        "overlay frame timestamp or dimensions are outside safe limits");
+  }
+  absl::StatusOr<OverlayFrameData> frame = SampleOverlayFrame(
+      telemetry, overlay, absl::Seconds(timestamp_seconds));
+  if (!frame.ok()) return frame.status();
+
+  Canvas canvas(width, height);
+  const int margin = std::max(16, height / 40);
+  const int track_size = std::min(width / 3, height * 5 / 9);
+  DrawTrack(canvas, overlay, frame->explored_track_point_count,
+            width - track_size - margin, margin, track_size);
+  const int dial_radius = std::max(38, height / 11);
+  const int panel_width = dial_radius * 2 + margin;
+  const int panel_height = dial_radius * 2 + margin * 3;
+  const int panel_y = height - margin - panel_height;
+  const int compass_x = margin;
+  DrawPanel(canvas, compass_x, panel_y, panel_width, panel_height);
+  const int label_scale = std::max(1, height / 360);
+  DrawText(canvas, "COMPASS", compass_x + margin / 2,
+           panel_y + margin / 2, label_scale, kMuted);
+  DrawCompass(canvas, frame->heading_degrees, compass_x + panel_width / 2,
+              panel_y + margin * 2 + dial_radius, dial_radius);
+  std::ostringstream heading;
+  heading << std::setfill('0') << std::setw(3)
+          << static_cast<int>(std::lround(frame->heading_degrees)) % 360
+          << " " << CardinalDirection(frame->heading_degrees);
+  DrawCenteredText(canvas, heading.str(), compass_x + panel_width / 2,
+                   panel_y + panel_height - margin, label_scale, kWhite);
+
+  const int g_panel_x = compass_x + panel_width + margin;
+  DrawPanel(canvas, g_panel_x, panel_y, panel_width, panel_height);
+  DrawText(canvas, "G FORCE", g_panel_x + margin / 2,
+           panel_y + margin / 2, label_scale, kMuted);
+  DrawGForce(canvas, frame->g_force, g_panel_x + panel_width / 2,
+             panel_y + margin * 2 + dial_radius, dial_radius);
+  const std::string lateral_g =
+      absl::StrCat("L", FormatG(frame->g_force.lateral_g));
+  const std::string forward_g =
+      absl::StrCat("F", FormatG(frame->g_force.longitudinal_g));
+  DrawCenteredText(canvas, lateral_g, g_panel_x + panel_width / 4,
+                   panel_y + panel_height - margin, label_scale, kWhite);
+  DrawCenteredText(canvas, forward_g, g_panel_x + panel_width * 3 / 4,
+                   panel_y + panel_height - margin, label_scale, kWhite);
+
+  const int digit_size = std::max(3, height / 90);
+  const int speed = static_cast<int>(std::lround(
+      frame->speed_meters_per_second * 3.6));
+  const int speed_width = digit_size * 23;
+  const int speed_height = digit_size * 14;
+  DrawPanel(canvas, margin, margin, speed_width, speed_height);
+  DrawText(canvas, "SPEED", margin + digit_size * 2, margin + digit_size,
+           std::max(1, digit_size / 2), kMuted);
+  DrawNumber(canvas, speed, margin + digit_size * 2,
+             margin + digit_size * 4, digit_size, kWhite);
+  DrawText(canvas, "KMH", margin + digit_size * 16,
+           margin + digit_size * 9, std::max(1, digit_size / 2), kMuted);
+  return canvas.TakePixels();
+}
+
 absl::Status RenderDebugFrames(const TelemetryData& telemetry,
                                const OverlayData& overlay,
                                const DebugRenderOptions& options) {
@@ -335,62 +402,13 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
     if (error) return absl::UnknownError(error.message());
     const double seconds = options.start_seconds +
                            frame_index / options.frames_per_second;
-    absl::StatusOr<OverlayFrameData> frame = SampleOverlayFrame(
-        telemetry, overlay, absl::Seconds(seconds));
-    if (!frame.ok()) return frame.status();
-
+    absl::StatusOr<std::vector<std::uint8_t>> pixels =
+        RenderOverlayFrameRgba(telemetry, overlay, seconds, options.width,
+                               options.height);
+    if (!pixels.ok()) return pixels.status();
     Canvas canvas(options.width, options.height);
-    const int margin = std::max(16, options.height / 40);
-    const int track_size = std::min(options.width / 3, options.height * 5 / 9);
-    DrawTrack(canvas, overlay, frame->explored_track_point_count,
-              options.width - track_size - margin, margin, track_size);
-    const int dial_radius = std::max(38, options.height / 11);
-    const int panel_width = dial_radius * 2 + margin;
-    const int panel_height = dial_radius * 2 + margin * 3;
-    const int panel_y = options.height - margin - panel_height;
-    const int compass_x = margin;
-    DrawPanel(canvas, compass_x, panel_y, panel_width, panel_height);
-    const int label_scale = std::max(1, options.height / 360);
-    DrawText(canvas, "COMPASS", compass_x + margin / 2,
-             panel_y + margin / 2, label_scale, kMuted);
-    DrawCompass(canvas, frame->heading_degrees,
-                compass_x + panel_width / 2,
-                panel_y + margin * 2 + dial_radius, dial_radius);
-    std::ostringstream heading;
-    heading << std::setfill('0') << std::setw(3)
-            << static_cast<int>(std::lround(frame->heading_degrees)) % 360
-            << " " << CardinalDirection(frame->heading_degrees);
-    DrawCenteredText(canvas, heading.str(), compass_x + panel_width / 2,
-                     panel_y + panel_height - margin, label_scale, kWhite);
-
-    const int g_panel_x = compass_x + panel_width + margin;
-    DrawPanel(canvas, g_panel_x, panel_y, panel_width, panel_height);
-    DrawText(canvas, "G FORCE", g_panel_x + margin / 2,
-             panel_y + margin / 2, label_scale, kMuted);
-    DrawGForce(canvas, frame->g_force, g_panel_x + panel_width / 2,
-               panel_y + margin * 2 + dial_radius, dial_radius);
-    const std::string lateral_g =
-        absl::StrCat("L", FormatG(frame->g_force.lateral_g));
-    const std::string forward_g =
-        absl::StrCat("F", FormatG(frame->g_force.longitudinal_g));
-    DrawCenteredText(canvas, lateral_g, g_panel_x + panel_width / 4,
-                     panel_y + panel_height - margin, label_scale, kWhite);
-    DrawCenteredText(canvas, forward_g,
-                     g_panel_x + panel_width * 3 / 4,
-                     panel_y + panel_height - margin, label_scale, kWhite);
-
-    const int digit_size = std::max(3, options.height / 90);
-    const int speed = static_cast<int>(std::lround(
-        frame->speed_meters_per_second * 3.6));
-    const int speed_width = digit_size * 23;
-    const int speed_height = digit_size * 14;
-    DrawPanel(canvas, margin, margin, speed_width, speed_height);
-    DrawText(canvas, "SPEED", margin + digit_size * 2,
-             margin + digit_size, std::max(1, digit_size / 2), kMuted);
-    DrawNumber(canvas, speed, margin + digit_size * 2,
-               margin + digit_size * 4, digit_size, kWhite);
-    DrawText(canvas, "KMH", margin + digit_size * 16,
-             margin + digit_size * 9, std::max(1, digit_size / 2), kMuted);
+    std::copy(pixels->begin(), pixels->end(),
+              canvas.mutable_data());
     const absl::Status status = WritePng(path, canvas);
     if (!status.ok()) return status;
   }

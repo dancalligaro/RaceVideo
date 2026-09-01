@@ -1,9 +1,11 @@
 #include "renderer/debug_renderer.h"
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -68,6 +70,38 @@ TEST(RenderDebugFramesTest, WritesRequestedPngFramesAndRefusesOverwrite) {
             absl::StatusCode::kAlreadyExists);
   std::filesystem::remove_all(directory, error);
   EXPECT_FALSE(error);
+}
+
+TEST(RenderOverlayFrameRgbaTest, ReturnsOneTransparentRgbaImage) {
+  TelemetryData telemetry;
+  telemetry.gps = {
+      {.timestamp = absl::Seconds(0),
+       .value = {.latitude_degrees = 30.0,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 10}},
+      {.timestamp = absl::Seconds(1),
+       .value = {.latitude_degrees = 30.001,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 11}}};
+  telemetry.filtered_g_force = {
+      {.timestamp = absl::Seconds(0), .value = {}},
+      {.timestamp = absl::Seconds(1), .value = {}}};
+  const absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+  ASSERT_TRUE(overlay.ok()) << overlay.status();
+
+  const absl::StatusOr<std::vector<std::uint8_t>> pixels =
+      RenderOverlayFrameRgba(telemetry, *overlay, 0.5, 320, 180);
+
+  ASSERT_TRUE(pixels.ok()) << pixels.status();
+  ASSERT_EQ(pixels->size(), 320u * 180u * 4u);
+  bool has_transparent_pixel = false;
+  bool has_visible_pixel = false;
+  for (std::size_t index = 3; index < pixels->size(); index += 4) {
+    has_transparent_pixel = has_transparent_pixel || (*pixels)[index] == 0;
+    has_visible_pixel = has_visible_pixel || (*pixels)[index] != 0;
+  }
+  EXPECT_TRUE(has_transparent_pixel);
+  EXPECT_TRUE(has_visible_pixel);
 }
 
 }  // namespace

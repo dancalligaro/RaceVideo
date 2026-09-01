@@ -50,6 +50,8 @@ add_library(racevideo_core
   src/ffmpeg/process.h
   src/ffmpeg/video_probe.cc
   src/ffmpeg/video_probe.h
+  src/ffmpeg/video_encoder.cc
+  src/ffmpeg/video_encoder.h
   src/overlay/overlay_data.cc
   src/overlay/overlay_data.h
   src/parser/mp4_gpmf.cc

@@ -127,9 +127,10 @@ racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
   --render_fps=30 --render_width=1920 --render_height=1080
 ```
 
-Each frame contains speed, compass heading, a G-force target, and the complete
-track. The unexplored track is white, the explored portion is blue, and the
-current position is red. RaceVideo renders only the requested interval, limits
+Each frame contains speed, a G-force target, and the complete track. The
+unexplored track is white, the explored portion is blue, and a red arrow marks
+the current position and heading. RaceVideo renders only the requested
+interval, limits
 one invocation to 10,000 frames, and refuses to overwrite existing numbered
 frames. These PNGs contain transparency and do not require FFmpeg or decode the
 video image; they are intended for inspecting the overlay layer.

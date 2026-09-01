@@ -25,10 +25,10 @@ namespace {
 struct Color { uint8_t r; uint8_t g; uint8_t b; uint8_t a; };
 constexpr Color kWhite{255, 255, 255, 230};
 constexpr Color kBlue{30, 145, 255, 255};
-constexpr Color kDark{8, 12, 18, 205};
 constexpr Color kMuted{158, 174, 192, 230};
 constexpr Color kGrid{255, 255, 255, 75};
 constexpr Color kRed{255, 70, 60, 255};
+constexpr Color kShadow{0, 0, 0, 210};
 
 class Canvas {
  public:
@@ -77,13 +77,6 @@ class Canvas {
       for (int column = x; column < x + width; ++column) Pixel(column, row, color);
     }
   }
-  void RectangleOutline(int x, int y, int width, int height, int thickness,
-                        Color color) {
-    Rectangle(x, y, width, thickness, color);
-    Rectangle(x, y + height - thickness, width, thickness, color);
-    Rectangle(x, y, thickness, height, color);
-    Rectangle(x + width - thickness, y, thickness, height, color);
-  }
   void Circle(int cx, int cy, int radius, int thickness, Color color) {
     constexpr int kSegments = 96;
     int last_x = cx + radius;
@@ -94,6 +87,27 @@ class Canvas {
       const int y = cy + static_cast<int>(std::lround(std::sin(angle) * radius));
       Line(last_x, last_y, x, y, thickness, color);
       last_x = x; last_y = y;
+    }
+  }
+  void Triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                Color color) {
+    const int minimum_x = std::max(0, std::min({x0, x1, x2}));
+    const int maximum_x = std::min(width_ - 1, std::max({x0, x1, x2}));
+    const int minimum_y = std::max(0, std::min({y0, y1, y2}));
+    const int maximum_y = std::min(height_ - 1, std::max({y0, y1, y2}));
+    auto edge = [](int ax, int ay, int bx, int by, int px, int py) {
+      return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+    };
+    for (int y = minimum_y; y <= maximum_y; ++y) {
+      for (int x = minimum_x; x <= maximum_x; ++x) {
+        const int first = edge(x0, y0, x1, y1, x, y);
+        const int second = edge(x1, y1, x2, y2, x, y);
+        const int third = edge(x2, y2, x0, y0, x, y);
+        if ((first >= 0 && second >= 0 && third >= 0) ||
+            (first <= 0 && second <= 0 && third <= 0)) {
+          Pixel(x, y, color);
+        }
+      }
     }
   }
 
@@ -135,6 +149,7 @@ std::array<uint8_t, 7> Glyph(char character) {
     case 'U': return {17, 17, 17, 17, 17, 17, 14};
     case 'V': return {17, 17, 17, 17, 17, 10, 4};
     case 'W': return {17, 17, 17, 21, 21, 21, 10};
+    case 'g': return {0, 0, 15, 17, 15, 1, 14};
     case '.': return {0, 0, 0, 0, 0, 6, 6};
     case '+': return {0, 4, 4, 31, 4, 4, 0};
     case '-': return {0, 0, 0, 31, 0, 0, 0};
@@ -162,16 +177,17 @@ void DrawText(Canvas& canvas, std::string_view text, int x, int y, int scale,
   }
 }
 
-void DrawCenteredText(Canvas& canvas, std::string_view text, int center_x,
-                      int y, int scale, Color color) {
-  DrawText(canvas, text, center_x - TextWidth(text, scale) / 2, y, scale,
-           color);
-}
-
-void DrawPanel(Canvas& canvas, int x, int y, int width, int height) {
-  canvas.Rectangle(x + 5, y + 6, width, height, Color{0, 0, 0, 90});
-  canvas.Rectangle(x, y, width, height, kDark);
-  canvas.RectangleOutline(x, y, width, height, 1, Color{255, 255, 255, 45});
+void DrawOutlinedText(Canvas& canvas, std::string_view text, int x, int y,
+                      int scale, Color color) {
+  const int radius = std::max(2, scale / 3);
+  for (int dy = -radius; dy <= radius; ++dy) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+      if (dx * dx + dy * dy <= radius * radius) {
+        DrawText(canvas, text, x + dx, y + dy, scale, kShadow);
+      }
+    }
+  }
+  DrawText(canvas, text, x, y, scale, color);
 }
 
 void DrawDigit(Canvas& canvas, int digit, int x, int y, int size, Color color) {
@@ -201,12 +217,28 @@ void DrawNumber(Canvas& canvas, int value, int x, int y, int size,
   }
 }
 
+void DrawOutlinedNumber(Canvas& canvas, int value, int x, int y, int size,
+                        Color color) {
+  const int radius = std::max(2, size / 8);
+  for (int dy = -radius; dy <= radius; ++dy) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+      if (dx * dx + dy * dy <= radius * radius) {
+        DrawNumber(canvas, value, x + dx, y + dy, size, kShadow);
+      }
+    }
+  }
+  DrawNumber(canvas, value, x, y, size, color);
+}
+
 void DrawTrack(Canvas& canvas, const OverlayData& overlay,
-               std::size_t explored, int x, int y, int size) {
+               std::size_t explored, double heading_degrees, int x, int y,
+               int size) {
   const int padding = size / 14;
   const int plot_x = x + padding;
   const int plot_y = y + padding;
   const int plot_size = size - padding * 2;
+  const int track_thickness = std::max(5, size / 35);
+  const int shadow_thickness = track_thickness + std::max(4, size / 50);
   auto point = [&](std::size_t index) {
     return std::pair{
         plot_x + static_cast<int>(overlay.track[index].x * plot_size),
@@ -215,7 +247,12 @@ void DrawTrack(Canvas& canvas, const OverlayData& overlay,
   for (std::size_t i = 1; i < overlay.track.size(); ++i) {
     const auto [x0, y0] = point(i - 1);
     const auto [x1, y1] = point(i);
-    canvas.Line(x0, y0, x1, y1, std::max(5, size / 35), kWhite);
+    canvas.Line(x0, y0, x1, y1, shadow_thickness, kShadow);
+  }
+  for (std::size_t i = 1; i < overlay.track.size(); ++i) {
+    const auto [x0, y0] = point(i - 1);
+    const auto [x1, y1] = point(i);
+    canvas.Line(x0, y0, x1, y1, track_thickness, kWhite);
   }
   const std::size_t end = std::min(explored, overlay.track.size());
   for (std::size_t i = 1; i < end; ++i) {
@@ -225,55 +262,45 @@ void DrawTrack(Canvas& canvas, const OverlayData& overlay,
   }
   if (end > 0) {
     const auto [px, py] = point(end - 1);
-    canvas.Disc(px, py, std::max(4, size / 40), kRed);
+    const double heading_radians =
+        heading_degrees * 3.14159265358979323846 / 180.0;
+    const double direction_x = std::sin(heading_radians);
+    const double direction_y = -std::cos(heading_radians);
+    const double perpendicular_x = -direction_y;
+    const double perpendicular_y = direction_x;
+    const int arrow_size = std::max(7, size / 22);
+    const int tip_x =
+        px + static_cast<int>(std::lround(direction_x * arrow_size));
+    const int tip_y =
+        py + static_cast<int>(std::lround(direction_y * arrow_size));
+    const double base_x = px - direction_x * arrow_size * 0.45;
+    const double base_y = py - direction_y * arrow_size * 0.45;
+    const int left_x = static_cast<int>(
+        std::lround(base_x + perpendicular_x * arrow_size * 0.65));
+    const int left_y = static_cast<int>(
+        std::lround(base_y + perpendicular_y * arrow_size * 0.65));
+    const int right_x = static_cast<int>(
+        std::lround(base_x - perpendicular_x * arrow_size * 0.65));
+    const int right_y = static_cast<int>(
+        std::lround(base_y - perpendicular_y * arrow_size * 0.65));
+    canvas.Triangle(tip_x, tip_y, left_x, left_y, right_x, right_y, kRed);
   }
 }
 
-void DrawCompass(Canvas& canvas, double heading, int cx, int cy, int radius) {
-  canvas.Circle(cx, cy, radius, 3, kWhite);
-  const int text_scale = std::max(1, radius / 30);
-  DrawCenteredText(canvas, "N", cx, cy - radius + text_scale * 3,
-                   text_scale, kWhite);
-  DrawCenteredText(canvas, "E", cx + radius - text_scale * 4,
-                   cy - text_scale * 3, text_scale, kMuted);
-  DrawCenteredText(canvas, "S", cx, cy + radius - text_scale * 10,
-                   text_scale, kMuted);
-  DrawCenteredText(canvas, "W", cx - radius + text_scale * 4,
-                   cy - text_scale * 3, text_scale, kMuted);
-  const double angle = (heading - 90.0) * 3.14159265358979323846 / 180.0;
-  canvas.Line(cx, cy,
-              cx + static_cast<int>(std::cos(angle) * radius * 0.78),
-              cy + static_cast<int>(std::sin(angle) * radius * 0.78), 7,
-              kBlue);
-  canvas.Disc(cx, cy, 7, kWhite);
-}
-
-std::string CardinalDirection(double heading) {
-  static constexpr std::array<std::string_view, 8> kDirections = {
-      "N", "NE", "E", "SE", "S", "SW", "W", "NW"};
-  const int index = static_cast<int>(std::lround(heading / 45.0)) % 8;
-  return std::string(kDirections[static_cast<std::size_t>(index)]);
-}
-
-std::string FormatG(double value) {
+std::string FormatGMagnitude(const GForceReading& value) {
   std::ostringstream output;
-  output << std::showpos << std::fixed << std::setprecision(1) << value;
+  output << std::fixed << std::setprecision(2)
+         << std::hypot(value.lateral_g, value.longitudinal_g) << " g";
   return output.str();
 }
 
 void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
                 int radius) {
+  canvas.Circle(cx, cy, radius, 9, kShadow);
   canvas.Circle(cx, cy, radius, 3, kWhite);
   canvas.Circle(cx, cy, radius / 2, 2, kGrid);
   canvas.Line(cx - radius, cy, cx + radius, cy, 1, kGrid);
   canvas.Line(cx, cy - radius, cx, cy + radius, 1, kGrid);
-  const int axis_scale = std::max(1, radius / 35);
-  DrawCenteredText(canvas, "FWD", cx, cy - radius + axis_scale * 3,
-                   axis_scale, kMuted);
-  DrawCenteredText(canvas, "L", cx - radius + axis_scale * 4,
-                   cy - axis_scale * 3, axis_scale, kMuted);
-  DrawCenteredText(canvas, "R", cx + radius - axis_scale * 4,
-                   cy - axis_scale * 3, axis_scale, kMuted);
   constexpr double kDisplayedG = 1.5;
   const double lateral = std::clamp(g.lateral_g / kDisplayedG, -1.0, 1.0);
   const double longitudinal =
@@ -324,35 +351,19 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   const int track_size =
       std::min(width / 3, height * 5 / 9) * 3 / 4;
   DrawTrack(canvas, overlay, frame->explored_track_point_count,
+            frame->heading_degrees,
             width - track_size - margin, margin, track_size);
   const int dial_radius = std::max(38, height / 11);
-  const int panel_width = dial_radius * 2 + margin;
-  const int panel_height = dial_radius * 2 + margin * 3;
-  const int panel_y = height - margin - panel_height;
-  const int compass_x = margin;
-  DrawPanel(canvas, compass_x, panel_y, panel_width, panel_height);
   const int label_scale = std::max(1, height / 360);
-  DrawCompass(canvas, frame->heading_degrees, compass_x + panel_width / 2,
-              panel_y + margin * 2 + dial_radius, dial_radius);
-  std::ostringstream heading;
-  heading << std::setfill('0') << std::setw(3)
-          << static_cast<int>(std::lround(frame->heading_degrees)) % 360
-          << " " << CardinalDirection(frame->heading_degrees);
-  DrawCenteredText(canvas, heading.str(), compass_x + panel_width / 2,
-                   panel_y + panel_height - margin, label_scale, kWhite);
-
-  const int g_panel_x = compass_x + panel_width + margin;
-  DrawPanel(canvas, g_panel_x, panel_y, panel_width, panel_height);
-  DrawGForce(canvas, frame->g_force, g_panel_x + panel_width / 2,
-             panel_y + margin * 2 + dial_radius, dial_radius);
-  const std::string lateral_g =
-      absl::StrCat("L", FormatG(frame->g_force.lateral_g));
-  const std::string forward_g =
-      absl::StrCat("F", FormatG(frame->g_force.longitudinal_g));
-  DrawCenteredText(canvas, lateral_g, g_panel_x + panel_width / 4,
-                   panel_y + panel_height - margin, label_scale, kWhite);
-  DrawCenteredText(canvas, forward_g, g_panel_x + panel_width * 3 / 4,
-                   panel_y + panel_height - margin, label_scale, kWhite);
+  const int magnitude_y = height - margin - 7 * label_scale;
+  const int gauge_center_x = margin + dial_radius;
+  const int gauge_center_y = magnitude_y - margin / 2 - dial_radius;
+  DrawGForce(canvas, frame->g_force, gauge_center_x, gauge_center_y,
+             dial_radius);
+  const std::string magnitude = FormatGMagnitude(frame->g_force);
+  DrawOutlinedText(canvas, magnitude,
+                   gauge_center_x - TextWidth(magnitude, label_scale) / 2,
+                   magnitude_y, label_scale, kWhite);
 
   const int digit_size = std::max(3, height / 90);
   const double speed_factor =
@@ -367,17 +378,15 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   constexpr int kSpeedDigits = 3;
   const int digit_advance = digit_size * 6;
   const int number_width = kSpeedDigits * digit_advance;
-  const int speed_width = speed_padding * 2 + number_width + digit_size +
-                          TextWidth(unit, unit_scale);
   const int speed_height = digit_size * 9;
-  DrawPanel(canvas, margin, margin, speed_width, speed_height);
   const int number_x = margin + speed_padding +
                        (kSpeedDigits - static_cast<int>(speed_text.size())) *
                            digit_advance;
-  DrawNumber(canvas, speed, number_x, margin + digit_size, digit_size, kWhite);
+  DrawOutlinedNumber(canvas, speed, number_x, margin + digit_size, digit_size,
+                     kWhite);
   const int unit_x = margin + speed_padding + number_width + digit_size;
   const int unit_y = margin + (speed_height - 7 * unit_scale) / 2;
-  DrawText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
+  DrawOutlinedText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
   return canvas.TakePixels();
 }
 

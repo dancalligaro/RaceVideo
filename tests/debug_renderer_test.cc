@@ -131,14 +131,15 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
 
   ASSERT_TRUE(pixels.ok()) << pixels.status();
   // At 180p, the renderer uses a 3-pixel digit stroke and a 16-pixel margin.
-  // "999 MPH" produces an 86-pixel-wide panel, whose right border is x=101.
+  // Reserve the former 86-pixel indicator area through x=101 even though its
+  // background panel is no longer drawn.
   constexpr int kPanelLeft = 16;
   constexpr int kPanelTop = 16;
   constexpr int kPanelHeight = 27;
-  constexpr int kRightBorderX = 101;
+  constexpr int kIndicatorRightX = 102;
   int rightmost_text_x = -1;
   for (int y = kPanelTop + 1; y < kPanelTop + kPanelHeight - 1; ++y) {
-    for (int x = kPanelLeft + 1; x < kRightBorderX; ++x) {
+    for (int x = kPanelLeft + 1; x < kIndicatorRightX; ++x) {
       const std::size_t alpha_index =
           (static_cast<std::size_t>(y) * kWidth + x) * 4 + 3;
       const std::uint8_t red = (*pixels)[alpha_index - 3];
@@ -151,8 +152,24 @@ TEST(RenderOverlayFrameRgbaTest, Fits999MphWithRightPadding) {
   }
   ASSERT_GE(rightmost_text_x, 0);
   constexpr int kRequiredRightPaddingPixels = 4;
-  EXPECT_GE(kRightBorderX - rightmost_text_x - 1,
+  EXPECT_GE(kIndicatorRightX - rightmost_text_x - 1,
             kRequiredRightPaddingPixels);
+  // Empty space inside the old panel bounds remains transparent, while the
+  // outlined glyphs contain dark shadow pixels.
+  EXPECT_EQ((*pixels)[(static_cast<std::size_t>(40) * kWidth + 17) * 4 + 3],
+            0);
+  bool has_dark_speed_shadow = false;
+  for (int y = 16; y < 43; ++y) {
+    for (int x = 16; x < kIndicatorRightX; ++x) {
+      const std::size_t index =
+          (static_cast<std::size_t>(y) * kWidth + x) * 4;
+      has_dark_speed_shadow =
+          has_dark_speed_shadow ||
+          ((*pixels)[index] == 0 && (*pixels)[index + 1] == 0 &&
+           (*pixels)[index + 2] == 0 && (*pixels)[index + 3] != 0);
+    }
+  }
+  EXPECT_TRUE(has_dark_speed_shadow);
 }
 
 TEST(RenderOverlayFrameRgbaTest, RightAlignsOneTwoAndThreeDigitSpeeds) {
@@ -252,6 +269,24 @@ TEST(RenderOverlayFrameRgbaTest,
   EXPECT_EQ(pixel(268, 53, 0), 230);
   EXPECT_EQ(pixel(268, 53, 1), 230);
   EXPECT_EQ(pixel(268, 53, 2), 230);
+  EXPECT_EQ(pixel(270, 53, 0), 0);
+  EXPECT_EQ(pixel(270, 53, 1), 0);
+  EXPECT_EQ(pixel(270, 53, 2), 0);
+  EXPECT_GT(pixel(270, 53, 3), 0);
+  // This route heads north, so the red arrow tip extends upward from the
+  // current track position at (266, 24).
+  EXPECT_EQ(pixel(266, 17, 0), 255);
+  EXPECT_EQ(pixel(266, 17, 1), 70);
+  EXPECT_EQ(pixel(266, 17, 2), 60);
+  // The G-force panel is absent. Its white outer ring has a black outline.
+  EXPECT_EQ(pixel(16, 70, 3), 0);
+  EXPECT_EQ(pixel(92, 111, 0), 230);
+  EXPECT_EQ(pixel(92, 111, 1), 230);
+  EXPECT_EQ(pixel(92, 111, 2), 230);
+  EXPECT_EQ(pixel(95, 111, 0), 0);
+  EXPECT_EQ(pixel(95, 111, 1), 0);
+  EXPECT_EQ(pixel(95, 111, 2), 0);
+  EXPECT_GT(pixel(95, 111, 3), 0);
 }
 
 }  // namespace

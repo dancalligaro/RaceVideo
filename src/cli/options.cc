@@ -41,6 +41,8 @@ ABSL_FLAG(int, output_width, 0,
           "Output video width; zero preserves the source resolution");
 ABSL_FLAG(std::string, video_encoder, "software",
           "Video encoder: software or nvidia");
+ABSL_FLAG(std::string, video_pipeline, "software",
+          "Video decode, scale, and overlay pipeline: software or nvidia");
 ABSL_FLAG(std::string, speed_unit, "",
           "Speed rows to display: kmh, mph, kmh,mph, or mph,kmh; omitted "
           "hides speed");
@@ -74,6 +76,14 @@ absl::StatusOr<VideoEncoder> ParseVideoEncoder(std::string value) {
   if (value == "nvidia") return VideoEncoder::kNvidia;
   return absl::InvalidArgumentError(
       "--video_encoder must be software or nvidia");
+}
+
+absl::StatusOr<VideoPipeline> ParseVideoPipeline(std::string value) {
+  absl::AsciiStrToLower(&value);
+  if (value == "software") return VideoPipeline::kSoftware;
+  if (value == "nvidia") return VideoPipeline::kNvidia;
+  return absl::InvalidArgumentError(
+      "--video_pipeline must be software or nvidia");
 }
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
@@ -111,6 +121,14 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   absl::StatusOr<VideoEncoder> video_encoder =
       ParseVideoEncoder(absl::GetFlag(FLAGS_video_encoder));
   if (!video_encoder.ok()) return video_encoder.status();
+  absl::StatusOr<VideoPipeline> video_pipeline =
+      ParseVideoPipeline(absl::GetFlag(FLAGS_video_pipeline));
+  if (!video_pipeline.ok()) return video_pipeline.status();
+  if (*video_pipeline == VideoPipeline::kNvidia &&
+      *video_encoder != VideoEncoder::kNvidia) {
+    return absl::InvalidArgumentError(
+        "--video_pipeline=nvidia requires --video_encoder=nvidia");
+  }
   absl::StatusOr<std::vector<SpeedUnit>> speed_units =
       ParseSpeedUnits(absl::GetFlag(FLAGS_speed_unit));
   if (!speed_units.ok()) return speed_units.status();
@@ -179,6 +197,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .render_height = render_height,
                  .output_width = output_width,
                  .video_encoder = *video_encoder,
+                 .video_pipeline = *video_pipeline,
                  .speed_units = std::move(*speed_units)};
 }
 

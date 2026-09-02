@@ -40,6 +40,21 @@ std::string FormatDuration(double total_seconds) {
   return output.str();
 }
 
+void PrintFineMountCalibration(const FineMountCalibration& calibration) {
+  if (!calibration.applied) {
+    std::cout << "Automatic mount calibration unavailable; using orthogonal "
+                 "orientation only.\n";
+    return;
+  }
+  std::ostringstream message;
+  message << std::fixed << std::setprecision(2)
+          << "Automatic mount calibration: pitch "
+          << calibration.pitch_degrees << " degrees, roll "
+          << calibration.roll_degrees << " degrees ("
+          << calibration.stationary_samples << " stationary samples).\n";
+  std::cout << message.str();
+}
+
 absl::Status ValidateInputFile(const std::filesystem::path& path) {
   std::error_code error;
   if (!std::filesystem::exists(path, error)) {
@@ -93,6 +108,9 @@ absl::StatusOr<CombinedChapters> PrepareChapters(
   double timeline_seconds = 0.0;
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const std::filesystem::path& path = paths[index];
+    std::cout << "Scanning chapter " << index + 1 << '/' << paths.size()
+              << ": " << path.filename().string() << "...\n"
+              << std::flush;
     absl::Status status = ValidateInputFile(path);
     if (!status.ok()) return status;
     absl::StatusOr<VideoInfo> video = ProbeVideo(path);
@@ -114,15 +132,11 @@ absl::StatusOr<CombinedChapters> PrepareChapters(
     if (!status.ok()) return status;
     status = DetectAndApplyMountOrientation(&*telemetry);
     if (!status.ok()) return status;
-    status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
-    if (!status.ok()) return status;
     if (index == 0) {
       combined.telemetry.acceleration_metadata =
           telemetry->acceleration_metadata;
       combined.telemetry.angular_velocity_metadata =
           telemetry->angular_velocity_metadata;
-      combined.telemetry.g_force_filter_cutoff_hz =
-          telemetry->g_force_filter_cutoff_hz;
     } else if (telemetry->acceleration_metadata.mount_orientation !=
                combined.telemetry.acceleration_metadata.mount_orientation) {
       return absl::FailedPreconditionError(absl::StrCat(
@@ -145,15 +159,19 @@ absl::StatusOr<CombinedChapters> PrepareChapters(
                            &combined.telemetry
                                 .angular_velocity_radians_per_second);
     if (!status.ok()) return status;
-    status = AppendSamples(telemetry->filtered_g_force, offset,
-                           chapter_duration,
-                           &combined.telemetry.filtered_g_force);
-    if (!status.ok()) return status;
     combined.chapters.push_back(
         {.path = path, .duration_seconds = video->duration_seconds});
     timeline_seconds += video->duration_seconds;
+    std::cout << "Scanned chapter " << index + 1 << '/' << paths.size()
+              << ".\n";
   }
   combined.video.duration_seconds = timeline_seconds;
+  const FineMountCalibration calibration =
+      ApplyStationaryMountCalibration(&combined.telemetry);
+  PrintFineMountCalibration(calibration);
+  absl::Status status = GenerateFilteredGForce(
+      kDefaultGForceFilterCutoffHz, &combined.telemetry);
+  if (!status.ok()) return status;
   return combined;
 }
 
@@ -217,6 +235,7 @@ absl::Status RunChapterList(const Options& options) {
          .duration_seconds = actual_duration,
          .output_width = options.output_width,
          .video_encoder = options.video_encoder,
+         .video_pipeline = options.video_pipeline,
          .speed_units = options.speed_units});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "
@@ -319,6 +338,9 @@ absl::Status Run(const Options& options) {
         absl::StrCat("input is not a file: ", options.input_path.string()));
   }
 
+  std::cout << "Scanning input video: "
+            << options.input_path.filename().string() << "...\n"
+            << std::flush;
   absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(options.input_path);
   if (!track.ok()) return track.status();
 
@@ -379,6 +401,8 @@ absl::Status Run(const Options& options) {
       const absl::Status mount_status =
           DetectAndApplyMountOrientation(&*telemetry);
       if (!mount_status.ok()) return mount_status;
+      PrintFineMountCalibration(
+          ApplyStationaryMountCalibration(&*telemetry));
       const absl::Status g_force_status = GenerateFilteredGForce(
           kDefaultGForceFilterCutoffHz, &*telemetry);
       if (!g_force_status.ok()) return g_force_status;
@@ -415,6 +439,8 @@ absl::Status Run(const Options& options) {
       const absl::Status mount_status =
           DetectAndApplyMountOrientation(&*telemetry);
       if (!mount_status.ok()) return mount_status;
+      PrintFineMountCalibration(
+          ApplyStationaryMountCalibration(&*telemetry));
       const absl::Status g_force_status = GenerateFilteredGForce(
           kDefaultGForceFilterCutoffHz, &*telemetry);
       if (!g_force_status.ok()) return g_force_status;
@@ -450,6 +476,7 @@ absl::Status Run(const Options& options) {
     if (!status.ok()) return status;
     status = DetectAndApplyMountOrientation(&*telemetry);
     if (!status.ok()) return status;
+    PrintFineMountCalibration(ApplyStationaryMountCalibration(&*telemetry));
     status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
     if (!status.ok()) return status;
     const double available_duration = duration_seconds - options.start_seconds;
@@ -511,6 +538,7 @@ absl::Status Run(const Options& options) {
     if (!status.ok()) return status;
     status = DetectAndApplyMountOrientation(&*telemetry);
     if (!status.ok()) return status;
+    PrintFineMountCalibration(ApplyStationaryMountCalibration(&*telemetry));
     status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
     if (!status.ok()) return status;
     absl::StatusOr<OverlayData> overlay = BuildOverlayData(
@@ -526,6 +554,7 @@ absl::Status Run(const Options& options) {
          .duration_seconds = actual_duration,
          .output_width = options.output_width,
          .video_encoder = options.video_encoder,
+         .video_pipeline = options.video_pipeline,
          .speed_units = options.speed_units});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "

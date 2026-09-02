@@ -29,12 +29,14 @@ struct Options {
   int render_height = 1080;
   int output_width = 0;
   VideoEncoder video_encoder = VideoEncoder::kSoftware;
+  VideoPipeline video_pipeline = VideoPipeline::kSoftware;
   std::vector<SpeedUnit> speed_units;
 };
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]);
 absl::StatusOr<std::vector<SpeedUnit>> ParseSpeedUnits(std::string value);
 absl::StatusOr<VideoEncoder> ParseVideoEncoder(std::string value);
+absl::StatusOr<VideoPipeline> ParseVideoPipeline(std::string value);
 
 }  // namespace racevideo
 

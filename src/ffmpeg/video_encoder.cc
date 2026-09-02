@@ -248,22 +248,68 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
           "the installed FFmpeg does not provide the h264_nvenc encoder");
     }
   }
+  if (options.video_pipeline == VideoPipeline::kNvidia) {
+    if (options.video_encoder != VideoEncoder::kNvidia) {
+      return absl::InvalidArgumentError(
+          "the NVIDIA video pipeline requires the NVIDIA encoder");
+    }
+    if (video.video_codec != "h264" && video.video_codec != "hevc") {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "the NVIDIA video pipeline supports H.264 and HEVC inputs, not ",
+          video.video_codec));
+    }
+    absl::StatusOr<ProcessResult> filters = RunProcessAndCaptureOutput(
+        *ffmpeg, {"-hide_banner", "-filters"});
+    if (!filters.ok()) return filters.status();
+    if (filters->exit_code != 0 ||
+        filters->output.find("scale_cuda") == std::string::npos ||
+        filters->output.find("overlay_cuda") == std::string::npos ||
+        filters->output.find("hwupload_cuda") == std::string::npos) {
+      return absl::FailedPreconditionError(
+          "the installed FFmpeg does not provide scale_cuda, overlay_cuda, "
+          "and hwupload_cuda");
+    }
+  }
 
   const std::string dimensions =
       absl::StrCat(output_dimensions->width, "x", output_dimensions->height);
   const bool scale_output = output_dimensions->width != video.width ||
                             output_dimensions->height != video.height;
-  const std::string filter =
-      scale_output
-          ? absl::StrCat("[0:v:0]scale=", output_dimensions->width, ":",
-                         output_dimensions->height,
-                         ":flags=fast_bilinear[base];"
-                         "[base][1:v:0]overlay=0:0:format=auto[v]")
-          : "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
+  std::string filter;
+  if (options.video_pipeline == VideoPipeline::kNvidia) {
+    filter = scale_output
+                 ? absl::StrCat(
+                       "[0:v:0]scale_cuda=", output_dimensions->width, ":",
+                       output_dimensions->height,
+                       ":format=yuv420p[base];"
+                       "[1:v:0]format=yuva420p,hwupload_cuda[over];"
+                       "[base][over]overlay_cuda=0:0[v]")
+                 : absl::StrCat(
+                       "[0:v:0]scale_cuda=", output_dimensions->width, ":",
+                       output_dimensions->height,
+                       ":format=yuv420p[base];"
+                       "[1:v:0]format=yuva420p,hwupload_cuda[over];"
+                       "[base][over]overlay_cuda=0:0[v]");
+  } else {
+    filter = scale_output
+                 ? absl::StrCat("[0:v:0]scale=", output_dimensions->width,
+                                ":", output_dimensions->height,
+                                ":flags=fast_bilinear[base];"
+                                "[base][1:v:0]overlay=0:0:format=auto[v]")
+                 : "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
+  }
   std::filesystem::path concat_manifest;
   std::vector<std::string> arguments = {
-      "-hide_banner", "-loglevel", "error", "-nostdin", "-ss",
-      Number(options.start_seconds), "-t", Number(options.duration_seconds)};
+      "-hide_banner", "-loglevel", "error", "-nostdin"};
+  if (options.video_pipeline == VideoPipeline::kNvidia) {
+    arguments.insert(arguments.end(),
+                     {"-init_hw_device", "cuda=cuda:0", "-filter_hw_device",
+                      "cuda", "-hwaccel", "cuda", "-hwaccel_output_format",
+                      "cuda"});
+  }
+  arguments.insert(arguments.end(),
+                   {"-ss", Number(options.start_seconds), "-t",
+                    Number(options.duration_seconds)});
   if (options.chapters.size() == 1) {
     arguments.insert(arguments.end(),
                      {"-i", PathAsUtf8(options.chapters.front().path)});
@@ -288,10 +334,25 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
     arguments.insert(arguments.end(),
                      {"-c:v", "libx264", "-preset", "medium", "-crf", "18"});
   }
+  if (options.video_pipeline == VideoPipeline::kSoftware) {
+    arguments.insert(arguments.end(), {"-pix_fmt", "yuv420p"});
+  } else {
+    // CUDA frames are allocated on 32-pixel boundaries. overlay_cuda exposes
+    // that allocation size to NVENC, so restore the requested display size in
+    // the H.264 cropping metadata.
+    const int crop_right =
+        (32 - output_dimensions->width % 32) % 32;
+    const int crop_bottom =
+        (32 - output_dimensions->height % 32) % 32;
+    arguments.insert(
+        arguments.end(),
+        {"-bsf:v", absl::StrCat("h264_metadata=crop_right=", crop_right,
+                                ":crop_bottom=", crop_bottom)});
+  }
   arguments.insert(arguments.end(),
-                   {"-pix_fmt", "yuv420p", "-c:a", "copy", "-t",
-                    Number(options.duration_seconds), "-movflags",
-                    "+faststart", "-n", PathAsUtf8(options.output_path)});
+                   {"-c:a", "copy", "-t", Number(options.duration_seconds),
+                    "-movflags", "+faststart", "-n",
+                    PathAsUtf8(options.output_path)});
 
   VideoInfo output_video = video;
   output_video.width = output_dimensions->width;

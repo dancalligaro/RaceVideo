@@ -177,10 +177,35 @@ error when the installed FFmpeg does not provide it. `--output_width=0`, the
 default, preserves the source resolution. Output widths must be even and at
 least 160 pixels; RaceVideo does not upscale the source video.
 
+With the NVIDIA encoder selected, the complete decode, scale, overlay, and
+encode path can optionally remain on the GPU:
+
+```powershell
+racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
+  --output_video="gpu-preview.mp4" --output_width=400 `
+  --video_encoder="nvidia" --video_pipeline="nvidia" `
+  --speed_unit="kmh,mph"
+```
+
+This mode requires an H.264 or HEVC source and an FFmpeg build containing CUDA
+hardware decoding plus `scale_cuda`, `overlay_cuda`, `hwupload_cuda`, and
+`h264_nvenc`. Only the generated transparent overlay frames are uploaded from
+the CPU. The default `--video_pipeline="software"` continues to use FFmpeg's
+software decoder, scaler, and overlay filter and can be used for compatibility
+or performance comparisons. Hardware processing is not guaranteed to be
+faster: CUDA startup, pixel conversion, and uploading a full-frame overlay can
+outweigh the decoding savings, particularly for low-resolution previews.
+
 Before encoding, RaceVideo prints the input and selected output durations.
 During encoding it reports frame progress as a percentage. After a successful
 run it prints elapsed wall-clock time as both total seconds and minutes plus
 seconds, making preview and encoder performance easy to compare.
+
+RaceVideo also looks across the complete recording for stationary periods and
+uses quiet accelerometer and gyroscope samples to correct small camera pitch
+and roll mounting errors. It prints the applied angles when calibration is
+reliable; otherwise it reports that only the orthogonal mount orientation is
+being used.
 
 ### Sequential GoPro chapters
 
@@ -206,7 +231,10 @@ RaceVideo validates that the chapters have matching video and audio stream
 properties before rendering. It combines their telemetry and durations into a
 single timeline, so `--start_seconds` and `--duration_seconds` apply to the
 complete recording and the track represents the selected range across all
-chapters. FFmpeg reads the source chapters directly through its concat demuxer;
+chapters. Initial scanning progress is printed for each chapter. Automatic
+mount calibration uses stationary evidence from the entire set—including the
+end of the final chapter—and applies one correction to every chapter. FFmpeg
+reads the source chapters directly through its concat demuxer;
 RaceVideo does not create an intermediate joined video. The input files remain
 unchanged.
 

@@ -49,5 +49,12 @@ TEST(ParseVideoEncoderTest, SupportsSoftwareAndNvidia) {
             absl::StatusCode::kInvalidArgument);
 }
 
+TEST(ParseVideoPipelineTest, SupportsSoftwareAndNvidia) {
+  EXPECT_EQ(*ParseVideoPipeline("software"), VideoPipeline::kSoftware);
+  EXPECT_EQ(*ParseVideoPipeline("NVIDIA"), VideoPipeline::kNvidia);
+  EXPECT_EQ(ParseVideoPipeline("automatic").status().code(),
+            absl::StatusCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace racevideo

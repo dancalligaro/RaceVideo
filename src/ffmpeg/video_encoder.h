@@ -32,6 +32,7 @@ struct VideoEncodeOptions {
   double duration_seconds;
   int output_width;
   VideoEncoder video_encoder;
+  VideoPipeline video_pipeline;
   std::vector<SpeedUnit> speed_units;
 };
 

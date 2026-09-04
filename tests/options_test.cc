@@ -42,9 +42,11 @@ TEST(ParseSpeedUnitsTest, IsCaseInsensitiveAndRejectsOtherLists) {
             absl::StatusCode::kInvalidArgument);
 }
 
-TEST(ParseVideoEncoderTest, SupportsSoftwareAndNvidia) {
+TEST(ParseVideoEncoderTest, SupportsDocumentedEncoders) {
   EXPECT_EQ(*ParseVideoEncoder("software"), VideoEncoder::kSoftware);
   EXPECT_EQ(*ParseVideoEncoder("NVIDIA"), VideoEncoder::kNvidia);
+  EXPECT_EQ(*ParseVideoEncoder("VideoToolbox"),
+            VideoEncoder::kVideoToolbox);
   EXPECT_EQ(ParseVideoEncoder("automatic").status().code(),
             absl::StatusCode::kInvalidArgument);
 }

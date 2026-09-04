@@ -4,7 +4,7 @@
 namespace racevideo {
 
 enum class SpeedUnit { kKilometersPerHour, kMilesPerHour };
-enum class VideoEncoder { kSoftware, kNvidia };
+enum class VideoEncoder { kSoftware, kNvidia, kVideoToolbox };
 enum class VideoPipeline { kSoftware, kNvidia };
 
 }  // namespace racevideo

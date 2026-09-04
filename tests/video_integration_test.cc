@@ -16,7 +16,12 @@ std::string Utf8(const std::filesystem::path& path) {
   return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
-class VideoIntegrationTest : public testing::TestWithParam<bool> {
+struct VideoEncodeCase {
+  bool multiple_chapters;
+  VideoEncoder encoder;
+};
+
+class VideoIntegrationTest : public testing::TestWithParam<VideoEncodeCase> {
  protected:
   void SetUp() override {
     directory_ =
@@ -36,6 +41,7 @@ class VideoIntegrationTest : public testing::TestWithParam<bool> {
 };
 
 TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
+  const VideoEncodeCase test_case = GetParam();
   const auto ffmpeg = FindExecutableOnPath("ffmpeg");
   ASSERT_TRUE(ffmpeg.ok()) << ffmpeg.status();
   ASSERT_TRUE(FindExecutableOnPath("ffprobe").ok());
@@ -64,7 +70,7 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   const auto video = ProbeVideo(first);
   ASSERT_TRUE(video.ok()) << video.status();
   std::vector<VideoChapter> chapters{{first, video->duration_seconds}};
-  if (GetParam()) {
+  if (test_case.multiple_chapters) {
     std::error_code error;
     ASSERT_TRUE(std::filesystem::copy_file(first, second, error)) << error;
     chapters.push_back({second, video->duration_seconds});
@@ -86,10 +92,10 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   const VideoEncodeOptions options{
       .chapters = chapters,
       .output_path = directory_ / "overlay result.mp4",
-      .start_seconds = GetParam() ? 0.5 : 0.0,
+      .start_seconds = test_case.multiple_chapters ? 0.5 : 0.0,
       .duration_seconds = 1.0,
       .output_width = 160,
-      .video_encoder = VideoEncoder::kSoftware,
+      .video_encoder = test_case.encoder,
       .video_pipeline = VideoPipeline::kSoftware,
       .speed_units = {SpeedUnit::kKilometersPerHour}};
   const auto status = EncodeOverlayVideo(telemetry, *overlay, *video, options);
@@ -108,7 +114,24 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   EXPECT_EQ(std::filesystem::file_size(options.output_path), previous_size);
 }
 
-INSTANTIATE_TEST_SUITE_P(Software, VideoIntegrationTest, testing::Bool());
+INSTANTIATE_TEST_SUITE_P(
+    Software, VideoIntegrationTest,
+    testing::Values(VideoEncodeCase{false, VideoEncoder::kSoftware},
+                    VideoEncodeCase{true, VideoEncoder::kSoftware}),
+    [](const testing::TestParamInfo<VideoEncodeCase>& info) {
+      return info.param.multiple_chapters ? "MultipleChapters"
+                                          : "SingleChapter";
+    });
+
+#ifdef __APPLE__
+INSTANTIATE_TEST_SUITE_P(
+    VideoToolbox, VideoIntegrationTest,
+    testing::Values(
+        VideoEncodeCase{false, VideoEncoder::kVideoToolbox}),
+    [](const testing::TestParamInfo<VideoEncodeCase>&) {
+      return "SingleChapter";
+    });
+#endif
 
 }  // namespace
 }  // namespace racevideo

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -240,14 +241,19 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
   absl::StatusOr<VideoDimensions> output_dimensions =
       DetermineOutputDimensions(video, options.output_width);
   if (!output_dimensions.ok()) return output_dimensions.status();
-  if (options.video_encoder == VideoEncoder::kNvidia) {
+  if (options.video_encoder == VideoEncoder::kNvidia ||
+      options.video_encoder == VideoEncoder::kVideoToolbox) {
+    const std::string_view encoder_name =
+        options.video_encoder == VideoEncoder::kNvidia ? "h264_nvenc"
+                                                       : "h264_videotoolbox";
     absl::StatusOr<ProcessResult> encoders = RunProcessAndCaptureOutput(
         *ffmpeg, {"-hide_banner", "-encoders"});
     if (!encoders.ok()) return encoders.status();
     if (encoders->exit_code != 0 ||
-        encoders->output.find("h264_nvenc") == std::string::npos) {
+        encoders->output.find(encoder_name) == std::string::npos) {
       return absl::FailedPreconditionError(
-          "the installed FFmpeg does not provide the h264_nvenc encoder");
+          absl::StrCat("the installed FFmpeg does not provide the ",
+                       encoder_name, " encoder"));
     }
   }
   if (options.video_pipeline == VideoPipeline::kNvidia) {
@@ -332,6 +338,10 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
     arguments.insert(arguments.end(),
                      {"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
                       "-cq", "19", "-b:v", "0"});
+  } else if (options.video_encoder == VideoEncoder::kVideoToolbox) {
+    arguments.insert(arguments.end(),
+                     {"-c:v", "h264_videotoolbox", "-profile:v", "high",
+                      "-q:v", "65"});
   } else {
     arguments.insert(arguments.end(),
                      {"-c:v", "libx264", "-preset", "medium", "-crf", "18"});

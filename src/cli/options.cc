@@ -40,7 +40,7 @@ ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
 ABSL_FLAG(int, output_width, 0,
           "Output video width; zero preserves the source resolution");
 ABSL_FLAG(std::string, video_encoder, "software",
-          "Video encoder: software or nvidia");
+          "Video encoder: software, nvidia, or videotoolbox");
 ABSL_FLAG(std::string, video_pipeline, "software",
           "Video decode, scale, and overlay pipeline: software or nvidia");
 ABSL_FLAG(std::string, speed_unit, "",
@@ -74,8 +74,9 @@ absl::StatusOr<VideoEncoder> ParseVideoEncoder(std::string value) {
   absl::AsciiStrToLower(&value);
   if (value == "software") return VideoEncoder::kSoftware;
   if (value == "nvidia") return VideoEncoder::kNvidia;
+  if (value == "videotoolbox") return VideoEncoder::kVideoToolbox;
   return absl::InvalidArgumentError(
-      "--video_encoder must be software or nvidia");
+      "--video_encoder must be software, nvidia, or videotoolbox");
 }
 
 absl::StatusOr<VideoPipeline> ParseVideoPipeline(std::string value) {

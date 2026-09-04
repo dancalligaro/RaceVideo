@@ -42,7 +42,7 @@ cmake --build --preset release
 ./build/release/racevideo --input="video.mp4" --inspect_video
 ./build/release/racevideo --input="video.mp4" --imu_axis_order="ZXY" \
   --output_video="preview.mp4" --duration_seconds=10 --output_width=400 \
-  --video_encoder=software --video_pipeline=software --speed_unit=kmh
+  --video_encoder=videotoolbox --video_pipeline=software --speed_unit=kmh
 ```
 
 Use the correct `--imu_axis_order` for your camera; `ZXY` is an example.
@@ -50,9 +50,11 @@ The Windows examples below also apply on macOS: replace `racevideo.exe` with
 `./build/release/racevideo` and PowerShell's backtick line continuations with
 shell backslashes.
 
-The software pipeline requires FFmpeg with `libx264` and works on macOS.
-NVIDIA/CUDA options require NVIDIA hardware and are not supported on Apple
-Silicon. Apple VideoToolbox acceleration is not implemented yet.
+The software encoder requires FFmpeg with `libx264`. On macOS,
+`--video_encoder=videotoolbox` uses Apple's hardware H.264 encoder while decode,
+scaling, and overlay composition remain on the CPU. It requires an FFmpeg build
+containing `h264_videotoolbox`; Homebrew's FFmpeg provides it. NVIDIA/CUDA
+options require NVIDIA hardware and are not supported on Apple Silicon.
 
 ### Linux
 
@@ -245,7 +247,11 @@ racevideo.exe --input="video.mp4" --imu_axis_order="ZXY" `
 
 `--video_encoder="software"` is the default and uses `libx264`.
 `--video_encoder="nvidia"` uses FFmpeg's `h264_nvenc` encoder and reports an
-error when the installed FFmpeg does not provide it. `--output_width=0`, the
+error when the installed FFmpeg does not provide it. On macOS,
+`--video_encoder="videotoolbox"` uses `h264_videotoolbox` for hardware H.264
+encoding with the default software pipeline. It reports an error if FFmpeg does
+not provide the encoder or the system cannot create a hardware encoding
+session. `--output_width=0`, the
 default, preserves the source resolution. Output widths must be even and at
 least 160 pixels; RaceVideo does not upscale the source video.
 

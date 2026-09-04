@@ -15,7 +15,9 @@
 namespace racevideo {
 
 struct ProcessResult {
+  // Native exit code; POSIX signal termination is reported as 128 + signal.
   unsigned long exit_code;
+  // Combined stdout and stderr, limited to 1 MiB.
   std::string output;
 };
 
@@ -23,6 +25,7 @@ using ByteSink =
     std::function<absl::Status(std::span<const std::uint8_t> bytes)>;
 using InputProducer = std::function<absl::Status(const ByteSink& sink)>;
 
+// Searches absolute PATH entries for a tool, without invoking a command shell.
 absl::StatusOr<std::filesystem::path> FindExecutableOnPath(
     std::string_view executable_name);
 absl::StatusOr<ProcessResult> RunProcessAndCaptureOutput(

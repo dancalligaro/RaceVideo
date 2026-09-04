@@ -37,7 +37,9 @@ std::string Number(double value) {
 
 std::string FfconcatPath(const std::filesystem::path& path) {
   std::string value = PathAsUtf8(std::filesystem::absolute(path));
+#ifdef _WIN32
   std::replace(value.begin(), value.end(), '\\', '/');
+#endif
   std::string escaped;
   escaped.reserve(value.size() + 2);
   escaped.push_back('\'');

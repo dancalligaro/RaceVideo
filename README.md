@@ -8,6 +8,61 @@ or endorsed by GoPro, Inc. GoPro is a trademark of GoPro, Inc.
 
 ## Development setup
 
+### macOS
+
+Install Apple's Command Line Tools (`xcode-select --install`) and Homebrew,
+then install the build tools and the separate FFmpeg runtime:
+
+```sh
+brew install cmake ninja pkg-config ffmpeg
+git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg"
+"$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+export VCPKG_ROOT="$HOME/vcpkg"
+```
+
+If you already have a standalone vcpkg checkout, set `VCPKG_ROOT` to it instead.
+CMake 3.28 or newer is required. From the RaceVideo directory, build and test:
+
+```sh
+cmake --preset debug -DVCPKG_TARGET_TRIPLET=arm64-osx -DRACEVIDEO_FFMPEG_TESTS=ON
+cmake --build --preset debug
+ctest --preset debug
+```
+
+Use `x64-osx` instead of `arm64-osx` on an Intel Mac. Build each architecture
+in its own build directory; these commands produce a native executable, not a
+universal binary. vcpkg installs the library versions pinned in `vcpkg.json`.
+The first configure also downloads the pinned GoPro parser and stb sources.
+
+For an optimized executable:
+
+```sh
+cmake --preset release -DVCPKG_TARGET_TRIPLET=arm64-osx
+cmake --build --preset release
+./build/release/racevideo --input="video.mp4" --inspect_video
+./build/release/racevideo --input="video.mp4" --imu_axis_order="ZXY" \
+  --output_video="preview.mp4" --duration_seconds=10 --output_width=400 \
+  --video_encoder=software --video_pipeline=software --speed_unit=kmh
+```
+
+Use the correct `--imu_axis_order` for your camera; `ZXY` is an example.
+The Windows examples below also apply on macOS: replace `racevideo.exe` with
+`./build/release/racevideo` and PowerShell's backtick line continuations with
+shell backslashes.
+
+The software pipeline requires FFmpeg with `libx264` and works on macOS.
+NVIDIA/CUDA options require NVIDIA hardware and are not supported on Apple
+Silicon. Apple VideoToolbox acceleration is not implemented yet.
+
+### Linux
+
+Use a C++20 compiler, CMake 3.28+, Ninja, a bootstrapped standalone vcpkg
+checkout, and FFmpeg with `libx264`. Follow the macOS configure/build commands
+with `-DVCPKG_TARGET_TRIPLET=x64-linux` (or `arm64-linux` on ARM64).
+macOS and Linux share the POSIX process backend.
+
+### Windows
+
 Requirements:
 
 - Visual Studio 2026 with the **Desktop development with C++** workload
@@ -40,6 +95,23 @@ The resulting executable is `build\release\racevideo.exe`.
 
 The project follows the Google C++ style, uses Abseil status-based error
 handling, and compiles application targets with C++ exceptions disabled.
+
+### Tests and external processes
+
+Normal builds include unit tests and process tests using a small test helper.
+Set `-DRACEVIDEO_FFMPEG_TESTS=ON` during configuration to also generate test
+videos and verify software overlay encoding, audio preservation, chapter
+concatenation, and refusal to overwrite an existing output. These integration
+tests require both `ffmpeg` and `ffprobe` on `PATH`; they do not need GoPro files.
+CI runs these tests on Windows, macOS, and Linux.
+
+External tools are started directly without a command shell. Executable lookup
+uses absolute `PATH` directories and skips relative or empty entries. On POSIX,
+capture-only commands receive EOF on stdin; streaming commands receive the
+generated RGBA frames. The backend handles broken pipes and reaps children on
+completion or errors. Terminal Ctrl-C reaches both processes through their
+shared foreground process group. Unlike Windows job objects, POSIX does not
+guarantee child cleanup if RaceVideo itself is forcibly killed with SIGKILL.
 
 ## Current milestone
 

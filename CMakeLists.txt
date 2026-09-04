@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(RaceVideo VERSION 0.1.0 LANGUAGES C CXX)
 
 option(RACEVIDEO_BUILD_TESTS "Build RaceVideo tests" ON)
+option(RACEVIDEO_FFMPEG_TESTS "Run integration tests requiring FFmpeg on PATH" OFF)
 
 add_library(racevideo_options INTERFACE)
 target_compile_features(racevideo_options INTERFACE cxx_std_20)
@@ -14,10 +15,23 @@ else()
   target_compile_options(
     racevideo_options
     INTERFACE -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Omitted fields in C++20 designated initializers are intentionally defaulted.
+    target_compile_options(racevideo_options INTERFACE -Wno-missing-field-initializers)
+  endif()
 endif()
 
 find_package(absl CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
+find_package(Threads REQUIRED)
+
+if(WIN32)
+  set(RACEVIDEO_PROCESS_SOURCE src/ffmpeg/process.cc)
+elseif(UNIX)
+  set(RACEVIDEO_PROCESS_SOURCE src/ffmpeg/process_posix.cc)
+else()
+  message(FATAL_ERROR "RaceVideo supports Windows, macOS, and Linux")
+endif()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -48,7 +62,7 @@ add_library(racevideo_core
   src/common/run.h
   src/common/input_list.cc
   src/common/input_list.h
-  src/ffmpeg/process.cc
+  ${RACEVIDEO_PROCESS_SOURCE}
   src/ffmpeg/process.h
   src/ffmpeg/video_probe.cc
   src/ffmpeg/video_probe.h
@@ -80,14 +94,19 @@ add_library(racevideo_core
 file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" RACEVIDEO_SOURCE_DIR)
 protobuf_generate(
   TARGET racevideo_core
+  OUT_VAR RACEVIDEO_PROTO_SOURCES
   LANGUAGE cpp
   IMPORT_DIRS "${RACEVIDEO_SOURCE_DIR}"
   PROTOS "${RACEVIDEO_SOURCE_DIR}/proto/telemetry.proto")
+# Generated Protobuf checks expand Abseil's Clang nullability annotations.
+# Keep strict warnings for application code while allowing that extension here.
+set_source_files_properties(${RACEVIDEO_PROTO_SOURCES} PROPERTIES
+  COMPILE_OPTIONS "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang>:-Wno-nullability-extension>")
 target_link_libraries(
   racevideo_core
   PUBLIC racevideo_options absl::flags absl::flags_parse absl::status
          absl::statusor absl::strings absl::time gpmf_parser
-         protobuf::libprotobuf racevideo_stb)
+         protobuf::libprotobuf racevideo_stb Threads::Threads)
 target_include_directories(
   racevideo_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -106,6 +125,7 @@ if(RACEVIDEO_BUILD_TESTS)
     tests/axis_mapping_test.cc
     tests/debug_renderer_test.cc
     tests/video_probe_test.cc
+    tests/process_test.cc
     tests/gpmf_metadata_test.cc
     tests/g_force_test.cc
     tests/gps_statistics_test.cc
@@ -120,5 +140,15 @@ if(RACEVIDEO_BUILD_TESTS)
     PRIVATE racevideo_core racevideo_options GTest::gtest_main)
 
   include(GoogleTest)
-  gtest_discover_tests(racevideo_tests DISCOVERY_MODE PRE_TEST)
+  add_executable(racevideo_process_helper tests/process_helper.cc)
+  target_link_libraries(racevideo_process_helper
+    PRIVATE racevideo_options Threads::Threads)
+  add_dependencies(racevideo_tests racevideo_process_helper)
+  target_compile_definitions(racevideo_tests PRIVATE
+    RACEVIDEO_PROCESS_HELPER="$<TARGET_FILE:racevideo_process_helper>")
+  if(RACEVIDEO_FFMPEG_TESTS)
+    target_sources(racevideo_tests PRIVATE tests/video_integration_test.cc)
+  endif()
+  gtest_discover_tests(racevideo_tests DISCOVERY_MODE PRE_TEST
+    PROPERTIES TIMEOUT 60)
 endif()

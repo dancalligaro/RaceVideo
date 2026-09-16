@@ -316,6 +316,52 @@ TEST(RenderOverlayFrameRgbaTest,
   EXPECT_GT(pixel(79, 119, 3), 0);
 }
 
+TEST(TrackRenderStateTest, IncrementalFramesMatchStatelessRenderer) {
+  TelemetryData telemetry;
+  telemetry.gps = {
+      {.timestamp = absl::Seconds(0),
+       .value = {.latitude_degrees = 30.0,
+                 .longitude_degrees = -97.0,
+                 .ground_speed_meters_per_second = 10}},
+      {.timestamp = absl::Seconds(1),
+       .value = {.latitude_degrees = 30.001,
+                 .longitude_degrees = -96.9995,
+                 .ground_speed_meters_per_second = 11}},
+      {.timestamp = absl::Seconds(2),
+       .value = {.latitude_degrees = 30.0015,
+                 .longitude_degrees = -96.999,
+                 .ground_speed_meters_per_second = 12}}};
+  telemetry.filtered_g_force = {
+      {.timestamp = absl::Seconds(0), .value = {}},
+      {.timestamp = absl::Seconds(2),
+       .value = {.lateral_g = 0.2, .longitudinal_g = 0.1}}};
+  const absl::StatusOr<OverlayData> overlay = BuildOverlayData(telemetry);
+  ASSERT_TRUE(overlay.ok()) << overlay.status();
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 180;
+  absl::StatusOr<TrackRenderState> state =
+      CreateTrackRenderState(*overlay, kWidth, kHeight);
+  ASSERT_TRUE(state.ok()) << state.status();
+
+  for (double seconds : {0.0, 0.5, 1.0, 1.5, 2.0}) {
+    const absl::StatusOr<OverlayFrameData> frame = SampleOverlayFrame(
+        telemetry, *overlay, absl::Seconds(seconds));
+    ASSERT_TRUE(frame.ok()) << frame.status();
+    const absl::StatusOr<TrackFrameSnapshot> snapshot =
+        AdvanceTrackRenderState(frame->explored_track_point_count, &*state);
+    ASSERT_TRUE(snapshot.ok()) << snapshot.status();
+    const absl::StatusOr<std::vector<std::uint8_t>> incremental =
+        RenderOverlayFrameRgba(*frame, *snapshot, kWidth, kHeight,
+                               {SpeedUnit::kKilometersPerHour});
+    const absl::StatusOr<std::vector<std::uint8_t>> stateless =
+        RenderOverlayFrameRgba(telemetry, *overlay, seconds, kWidth, kHeight,
+                               {SpeedUnit::kKilometersPerHour});
+    ASSERT_TRUE(incremental.ok()) << incremental.status();
+    ASSERT_TRUE(stateless.ok()) << stateless.status();
+    EXPECT_EQ(*incremental, *stateless);
+  }
+}
+
 TEST(RenderOverlayFrameRgbaTest, MapsOneGToInnerRingAndCapsDotAtOnePointTwoG) {
   constexpr int kWidth = 320;
   constexpr int kHeight = 180;

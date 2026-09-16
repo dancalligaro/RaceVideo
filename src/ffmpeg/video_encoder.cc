@@ -1,6 +1,7 @@
 #include "ffmpeg/video_encoder.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -98,6 +99,15 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
                                   const VideoInfo& video,
                                   const VideoEncodeOptions& options,
                                   int frame_count, const ByteSink& sink) {
+  const auto track_setup_start = std::chrono::steady_clock::now();
+  absl::StatusOr<TrackRenderState> track_state =
+      CreateTrackRenderState(overlay, video.width, video.height);
+  if (!track_state.ok()) return track_state.status();
+  const double track_setup_seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - track_setup_start).count();
+  std::atomic<std::int64_t> track_update_nanoseconds{0};
+  std::atomic<std::int64_t> frame_render_nanoseconds{0};
+  std::int64_t pipe_write_nanoseconds = 0;
   const unsigned available_threads = std::thread::hardware_concurrency();
   const unsigned requested_workers = std::max(
       1u, std::min(12u, available_threads == 0 ? 4u : available_threads / 2));
@@ -120,6 +130,9 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
   auto worker = [&]() {
     for (;;) {
       int frame_index = 0;
+      OverlayFrameData frame_data{};
+      TrackFrameSnapshot track_snapshot{};
+      absl::Status preparation_status = absl::OkStatus();
       {
         std::unique_lock lock(mutex);
         state_changed.wait(lock, [&] {
@@ -128,13 +141,45 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
         });
         if (stop || next_to_assign >= frame_count) return;
         frame_index = next_to_assign++;
+        const auto track_update_start = std::chrono::steady_clock::now();
+        const double timestamp =
+            options.start_seconds + frame_index / video.frames_per_second;
+        absl::StatusOr<OverlayFrameData> sampled = SampleOverlayFrame(
+            telemetry, overlay, absl::Seconds(timestamp));
+        if (!sampled.ok()) {
+          preparation_status = sampled.status();
+        } else {
+          frame_data = *sampled;
+          absl::StatusOr<TrackFrameSnapshot> snapshot =
+              AdvanceTrackRenderState(frame_data.explored_track_point_count,
+                                      &*track_state);
+          if (!snapshot.ok()) {
+            preparation_status = snapshot.status();
+          } else {
+            track_snapshot = std::move(*snapshot);
+          }
+        }
+        track_update_nanoseconds.fetch_add(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - track_update_start)
+                .count(),
+            std::memory_order_relaxed);
       }
 
-      const double timestamp =
-          options.start_seconds + frame_index / video.frames_per_second;
       absl::StatusOr<std::vector<std::uint8_t>> pixels =
-          RenderOverlayFrameRgba(telemetry, overlay, timestamp, video.width,
-                                 video.height, options.speed_units);
+          absl::UnknownError("overlay frame was not rendered");
+      if (preparation_status.ok()) {
+        const auto frame_render_start = std::chrono::steady_clock::now();
+        pixels = RenderOverlayFrameRgba(frame_data, track_snapshot, video.width,
+                                        video.height, options.speed_units);
+        frame_render_nanoseconds.fetch_add(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - frame_render_start)
+                .count(),
+            std::memory_order_relaxed);
+      } else {
+        pixels = preparation_status;
+      }
 
       {
         std::lock_guard lock(mutex);
@@ -154,9 +199,8 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
     workers.emplace_back(worker);
   }
 
-  int last_percentage = 0;
-  std::cout << "Encoding progress: " << std::setw(3) << last_percentage
-            << "%\r" << std::flush;
+  auto last_progress_report = std::chrono::steady_clock::now();
+  std::cout << "Encoding progress:   0%\r" << std::flush;
   absl::Status result = absl::OkStatus();
   while (next_to_write < frame_count) {
     std::vector<std::uint8_t> pixels;
@@ -176,7 +220,12 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
     }
     state_changed.notify_all();
     if (!result.ok()) break;
+    const auto pipe_write_start = std::chrono::steady_clock::now();
     result = sink(std::span<const std::uint8_t>(pixels));
+    pipe_write_nanoseconds +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - pipe_write_start)
+            .count();
     if (!result.ok()) {
       {
         std::lock_guard lock(mutex);
@@ -185,11 +234,21 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
       state_changed.notify_all();
       break;
     }
-    const int percentage = std::min(100, next_to_write * 100 / frame_count);
-    if (percentage != last_percentage) {
-      last_percentage = percentage;
+    const auto now = std::chrono::steady_clock::now();
+    if (next_to_write == frame_count ||
+        now - last_progress_report >= std::chrono::seconds(1)) {
+      last_progress_report = now;
+      const int percentage =
+          std::min(100, next_to_write * 100 / frame_count);
       std::cout << "Encoding progress: " << std::setw(3) << percentage
-                << "%\r" << std::flush;
+                << "% | overlay CPU " << std::fixed << std::setprecision(1)
+                << frame_render_nanoseconds.load(std::memory_order_relaxed) /
+                       1e9
+                << " s | track "
+                << track_update_nanoseconds.load(std::memory_order_relaxed) /
+                       1e9
+                << " s | FFmpeg wait " << pipe_write_nanoseconds / 1e9
+                << " s\r" << std::defaultfloat << std::flush;
     }
   }
 
@@ -199,7 +258,15 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
   }
   state_changed.notify_all();
   for (std::thread& thread : workers) thread.join();
-  std::cout << '\n';
+  std::cout << "\nOverlay timing: track setup " << std::fixed
+            << std::setprecision(2) << track_setup_seconds
+            << " s, incremental track "
+            << track_update_nanoseconds.load(std::memory_order_relaxed) / 1e9
+            << " s, frame rasterization "
+            << frame_render_nanoseconds.load(std::memory_order_relaxed) / 1e9
+            << " cumulative worker-s, FFmpeg pipe/wait "
+            << pipe_write_nanoseconds / 1e9 << " s.\n"
+            << std::defaultfloat;
   return result;
 }
 

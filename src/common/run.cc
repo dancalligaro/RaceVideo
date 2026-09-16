@@ -1,6 +1,7 @@
 #include "common/run.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -38,6 +39,20 @@ std::string FormatDuration(double total_seconds) {
          << " seconds (" << minutes << " minutes " << seconds
          << " seconds)";
   return output.str();
+}
+
+absl::StatusOr<OverlayData> BuildTimedOverlayData(
+    const TelemetryData& telemetry, absl::Duration start,
+    absl::Duration end) {
+  const auto begin = std::chrono::steady_clock::now();
+  absl::StatusOr<OverlayData> result =
+      BuildOverlayData(telemetry, start, end);
+  const double seconds = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - begin).count();
+  std::cout << "Map/overlay data preparation: " << std::fixed
+            << std::setprecision(2) << seconds << " seconds.\n"
+            << std::defaultfloat;
+  return result;
 }
 
 void PrintFineMountCalibration(const FineMountCalibration& calibration) {
@@ -195,7 +210,7 @@ absl::Status RunChapters(const Options& options,
             << FormatDuration(combined->video.duration_seconds) << '\n'
             << "Selected output duration: " << FormatDuration(actual_duration)
             << '\n';
-  absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+  absl::StatusOr<OverlayData> overlay = BuildTimedOverlayData(
       combined->telemetry, absl::Seconds(options.start_seconds),
       absl::Seconds(options.start_seconds + actual_duration));
   if (!overlay.ok()) return overlay.status();
@@ -489,7 +504,7 @@ absl::Status Run(const Options& options) {
     const double available_duration = duration_seconds - options.start_seconds;
     const double actual_duration =
         std::min(options.duration_seconds, available_duration);
-    absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+    absl::StatusOr<OverlayData> overlay = BuildTimedOverlayData(
         *telemetry, absl::Seconds(options.start_seconds),
         absl::Seconds(options.start_seconds + actual_duration));
     if (!overlay.ok()) return overlay.status();
@@ -548,7 +563,7 @@ absl::Status Run(const Options& options) {
     PrintFineMountCalibration(ApplyStationaryMountCalibration(&*telemetry));
     status = GenerateFilteredGForce(kDefaultGForceFilterCutoffHz, &*telemetry);
     if (!status.ok()) return status;
-    absl::StatusOr<OverlayData> overlay = BuildOverlayData(
+    absl::StatusOr<OverlayData> overlay = BuildTimedOverlayData(
         *telemetry, absl::Seconds(options.start_seconds),
         absl::Seconds(options.start_seconds + actual_duration));
     if (!overlay.ok()) return overlay.status();

@@ -275,9 +275,14 @@ faster: CUDA startup, pixel conversion, and uploading a full-frame overlay can
 outweigh the decoding savings, particularly for low-resolution previews.
 
 Before encoding, RaceVideo prints the input and selected output durations.
-During encoding it reports frame progress as a percentage. After a successful
-run it prints elapsed wall-clock time as both total seconds and minutes plus
-seconds, making preview and encoder performance easy to compare.
+During encoding it reports frame progress at most once per second, together
+with cumulative overlay-rendering, incremental-track, and FFmpeg pipe/wait
+timings. A final summary also reports map preparation and initial track setup.
+The complete white track is rasterized once and the blue travelled route is
+updated incrementally as timestamps advance; it is not rebuilt from the
+beginning for every frame. After a successful run RaceVideo prints elapsed
+wall-clock time as both total seconds and minutes plus seconds, making preview
+and encoder performance easy to compare.
 
 RaceVideo also looks across the complete recording for stationary periods and
 uses quiet accelerometer and gyroscope samples to correct small camera pitch

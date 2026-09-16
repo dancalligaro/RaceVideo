@@ -35,11 +35,27 @@ class Canvas {
   Canvas(int width, int height)
       : width_(width), height_(height), pixels_(static_cast<std::size_t>(width) *
                                                 height * 4, 0) {}
+  Canvas(int width, int height, std::vector<uint8_t> pixels)
+      : width_(width), height_(height), pixels_(std::move(pixels)) {}
   int width() const { return width_; }
   int height() const { return height_; }
   const uint8_t* data() const { return pixels_.data(); }
   uint8_t* mutable_data() { return pixels_.data(); }
   std::vector<uint8_t> TakePixels() { return std::move(pixels_); }
+
+  void Blit(const std::vector<uint8_t>& source, int source_width,
+            int source_height, int destination_x, int destination_y) {
+    for (int y = 0; y < source_height; ++y) {
+      const std::size_t source_offset =
+          static_cast<std::size_t>(y) * source_width * 4;
+      const std::size_t destination_offset =
+          (static_cast<std::size_t>(destination_y + y) * width_ +
+           destination_x) * 4;
+      std::copy_n(source.data() + source_offset,
+                  static_cast<std::size_t>(source_width) * 4,
+                  pixels_.data() + destination_offset);
+    }
+  }
 
   void Pixel(int x, int y, Color color) {
     if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
@@ -230,6 +246,32 @@ void DrawOutlinedNumber(Canvas& canvas, int value, int x, int y, int size,
   DrawNumber(canvas, value, x, y, size, color);
 }
 
+void DrawArrow(Canvas& canvas, int px, int py, double heading_degrees,
+               int size) {
+  const double heading_radians =
+      heading_degrees * 3.14159265358979323846 / 180.0;
+  const double direction_x = std::sin(heading_radians);
+  const double direction_y = -std::cos(heading_radians);
+  const double perpendicular_x = -direction_y;
+  const double perpendicular_y = direction_x;
+  const int arrow_size = std::max(7, size / 22);
+  const int tip_x =
+      px + static_cast<int>(std::lround(direction_x * arrow_size));
+  const int tip_y =
+      py + static_cast<int>(std::lround(direction_y * arrow_size));
+  const double base_x = px - direction_x * arrow_size * 0.45;
+  const double base_y = py - direction_y * arrow_size * 0.45;
+  const int left_x = static_cast<int>(
+      std::lround(base_x + perpendicular_x * arrow_size * 0.65));
+  const int left_y = static_cast<int>(
+      std::lround(base_y + perpendicular_y * arrow_size * 0.65));
+  const int right_x = static_cast<int>(
+      std::lround(base_x - perpendicular_x * arrow_size * 0.65));
+  const int right_y = static_cast<int>(
+      std::lround(base_y - perpendicular_y * arrow_size * 0.65));
+  canvas.Triangle(tip_x, tip_y, left_x, left_y, right_x, right_y, kRed);
+}
+
 void DrawTrack(Canvas& canvas, const OverlayData& overlay,
                std::size_t explored, double heading_degrees, int x, int y,
                int size) {
@@ -262,28 +304,7 @@ void DrawTrack(Canvas& canvas, const OverlayData& overlay,
   }
   if (end > 0) {
     const auto [px, py] = point(end - 1);
-    const double heading_radians =
-        heading_degrees * 3.14159265358979323846 / 180.0;
-    const double direction_x = std::sin(heading_radians);
-    const double direction_y = -std::cos(heading_radians);
-    const double perpendicular_x = -direction_y;
-    const double perpendicular_y = direction_x;
-    const int arrow_size = std::max(7, size / 22);
-    const int tip_x =
-        px + static_cast<int>(std::lround(direction_x * arrow_size));
-    const int tip_y =
-        py + static_cast<int>(std::lround(direction_y * arrow_size));
-    const double base_x = px - direction_x * arrow_size * 0.45;
-    const double base_y = py - direction_y * arrow_size * 0.45;
-    const int left_x = static_cast<int>(
-        std::lround(base_x + perpendicular_x * arrow_size * 0.65));
-    const int left_y = static_cast<int>(
-        std::lround(base_y + perpendicular_y * arrow_size * 0.65));
-    const int right_x = static_cast<int>(
-        std::lround(base_x - perpendicular_x * arrow_size * 0.65));
-    const int right_y = static_cast<int>(
-        std::lround(base_y - perpendicular_y * arrow_size * 0.65));
-    canvas.Triangle(tip_x, tip_y, left_x, left_y, right_x, right_y, kRed);
+    DrawArrow(canvas, px, py, heading_degrees, size);
   }
 }
 
@@ -318,6 +339,51 @@ void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
   canvas.Disc(dot_x, dot_y, std::max(8, radius / 10), kRed);
 }
 
+void DrawReadouts(Canvas& canvas, const OverlayFrameData& frame,
+                  const std::vector<SpeedUnit>& speed_units) {
+  const int height = canvas.height();
+  const int margin = std::max(16, height / 40);
+  const int dial_radius = std::max(30, height * 4 / 55);
+  const int label_scale = std::max(1, height / 360);
+  const int magnitude_y = height - margin - 7 * label_scale;
+  const int gauge_center_x = margin + dial_radius;
+  const int gauge_center_y = magnitude_y - margin / 2 - dial_radius;
+  DrawGForce(canvas, frame.g_force, gauge_center_x, gauge_center_y,
+             dial_radius);
+  const std::string magnitude = FormatGMagnitude(frame.g_force);
+  DrawOutlinedText(canvas, magnitude,
+                   gauge_center_x - TextWidth(magnitude, label_scale) / 2,
+                   magnitude_y, label_scale, kWhite);
+
+  const int digit_size = std::max(2, std::max(3, height / 90) * 7 / 10);
+  const int unit_scale = std::max(1, digit_size / 2);
+  const int speed_padding = digit_size * 2;
+  constexpr int kSpeedDigits = 3;
+  const int digit_advance = digit_size * 6;
+  const int number_width = kSpeedDigits * digit_advance;
+  const int unit_x = margin + speed_padding + number_width + digit_size;
+  const int row_height = digit_size * 7;
+  const int row_gap = std::max(9, digit_size * 2);
+  const auto draw_speed_row = [&](double factor, std::string_view unit,
+                                  int row_y) {
+    const int speed = static_cast<int>(std::lround(std::clamp(
+        frame.speed_meters_per_second * factor, 0.0, 999.0)));
+    const int digit_count =
+        static_cast<int>(std::to_string(std::max(0, speed)).size());
+    const int number_x =
+        margin + speed_padding + (kSpeedDigits - digit_count) * digit_advance;
+    DrawOutlinedNumber(canvas, speed, number_x, row_y, digit_size, kWhite);
+    const int unit_y = row_y + (row_height - 7 * unit_scale) / 2;
+    DrawOutlinedText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
+  };
+  for (std::size_t index = 0; index < speed_units.size(); ++index) {
+    const bool miles = speed_units[index] == SpeedUnit::kMilesPerHour;
+    draw_speed_row(miles ? 2.2369362920544 : 3.6,
+                   miles ? "MPH" : "KMH",
+                   margin + static_cast<int>(index) * (row_height + row_gap));
+  }
+}
+
 struct WriteContext { std::ofstream stream; bool failed = false; };
 void WritePngBytes(void* context, void* data, int size) {
   auto* output = static_cast<WriteContext*>(context);
@@ -343,6 +409,107 @@ absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
 
 }  // namespace
 
+absl::StatusOr<TrackRenderState> CreateTrackRenderState(
+    const OverlayData& overlay, int frame_width, int frame_height) {
+  if (overlay.track.empty()) {
+    return absl::FailedPreconditionError("track data is empty");
+  }
+  if (frame_width < 160 || frame_height < 90 || frame_width > 7680 ||
+      frame_height > 4320) {
+    return absl::InvalidArgumentError("track frame dimensions are invalid");
+  }
+  const int margin = std::max(16, frame_height / 40);
+  const int size =
+      std::min(frame_width / 3, frame_height * 5 / 9) * 3 / 4;
+  const int padding = size / 14;
+  const int plot_size = size - padding * 2;
+  const int track_thickness = std::max(5, size / 35);
+  const int shadow_thickness = track_thickness + std::max(4, size / 50);
+
+  TrackRenderState state{
+      .frame_x = frame_width - size - margin,
+      .frame_y = margin,
+      .size = size,
+      .blue_thickness = std::max(3, size / 70)};
+  state.points.reserve(overlay.track.size());
+  for (const TrackPoint& point : overlay.track) {
+    state.points.push_back(
+        {.x = padding + static_cast<int>(point.x * plot_size),
+         .y = padding + static_cast<int>(point.y * plot_size)});
+  }
+
+  Canvas canvas(size, size);
+  for (std::size_t i = 1; i < state.points.size(); ++i) {
+    canvas.Line(state.points[i - 1].x, state.points[i - 1].y,
+                state.points[i].x, state.points[i].y, shadow_thickness,
+                kShadow);
+  }
+  for (std::size_t i = 1; i < state.points.size(); ++i) {
+    canvas.Line(state.points[i - 1].x, state.points[i - 1].y,
+                state.points[i].x, state.points[i].y, track_thickness,
+                kWhite);
+  }
+  state.pixels = canvas.TakePixels();
+  return state;
+}
+
+absl::StatusOr<TrackFrameSnapshot> AdvanceTrackRenderState(
+    std::size_t explored_point_count, TrackRenderState* state) {
+  const std::size_t target =
+      std::min(explored_point_count, state->points.size());
+  if (target < state->explored_point_count) {
+    return absl::InvalidArgumentError(
+        "track render timestamps must be processed in increasing order");
+  }
+  Canvas canvas(state->size, state->size, std::move(state->pixels));
+  for (std::size_t i = std::max<std::size_t>(1, state->explored_point_count);
+       i < target; ++i) {
+    canvas.Line(state->points[i - 1].x, state->points[i - 1].y,
+                state->points[i].x, state->points[i].y,
+                state->blue_thickness, kBlue);
+  }
+  state->explored_point_count = target;
+  state->pixels = canvas.TakePixels();
+
+  TrackFrameSnapshot snapshot{
+      .frame_x = state->frame_x,
+      .frame_y = state->frame_y,
+      .size = state->size,
+      .arrow_x = 0,
+      .arrow_y = 0,
+      .has_arrow = target > 0,
+      .pixels = state->pixels};
+  if (target > 0) {
+    snapshot.arrow_x = state->points[target - 1].x;
+    snapshot.arrow_y = state->points[target - 1].y;
+  }
+  return snapshot;
+}
+
+absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
+    const OverlayFrameData& frame, const TrackFrameSnapshot& track, int width,
+    int height, const std::vector<SpeedUnit>& speed_units) {
+  const std::size_t expected_track_bytes =
+      static_cast<std::size_t>(track.size) * track.size * 4;
+  if (width < 160 || height < 90 || width > 7680 || height > 4320 ||
+      track.size <= 0 || track.frame_x < 0 || track.frame_y < 0 ||
+      track.frame_x + track.size > width || track.frame_y + track.size > height ||
+      track.pixels.size() != expected_track_bytes) {
+    return absl::InvalidArgumentError(
+        "overlay frame or track snapshot dimensions are invalid");
+  }
+  Canvas canvas(width, height);
+  canvas.Blit(track.pixels, track.size, track.size, track.frame_x,
+              track.frame_y);
+  if (track.has_arrow) {
+    DrawArrow(canvas, track.frame_x + track.arrow_x,
+              track.frame_y + track.arrow_y, frame.heading_degrees,
+              track.size);
+  }
+  DrawReadouts(canvas, frame, speed_units);
+  return canvas.TakePixels();
+}
+
 absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
     const TelemetryData& telemetry, const OverlayData& overlay,
     double timestamp_seconds, int width, int height,
@@ -363,45 +530,7 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
   DrawTrack(canvas, overlay, frame->explored_track_point_count,
             frame->heading_degrees,
             width - track_size - margin, margin, track_size);
-  const int dial_radius = std::max(30, height * 4 / 55);
-  const int label_scale = std::max(1, height / 360);
-  const int magnitude_y = height - margin - 7 * label_scale;
-  const int gauge_center_x = margin + dial_radius;
-  const int gauge_center_y = magnitude_y - margin / 2 - dial_radius;
-  DrawGForce(canvas, frame->g_force, gauge_center_x, gauge_center_y,
-             dial_radius);
-  const std::string magnitude = FormatGMagnitude(frame->g_force);
-  DrawOutlinedText(canvas, magnitude,
-                   gauge_center_x - TextWidth(magnitude, label_scale) / 2,
-                   magnitude_y, label_scale, kWhite);
-
-  const int digit_size = std::max(2, std::max(3, height / 90) * 7 / 10);
-  const int unit_scale = std::max(1, digit_size / 2);
-  const int speed_padding = digit_size * 2;
-  constexpr int kSpeedDigits = 3;
-  const int digit_advance = digit_size * 6;
-  const int number_width = kSpeedDigits * digit_advance;
-  const int unit_x = margin + speed_padding + number_width + digit_size;
-  const int row_height = digit_size * 7;
-  const int row_gap = std::max(9, digit_size * 2);
-  const auto draw_speed_row = [&](double factor, std::string_view unit,
-                                  int row_y) {
-    const int speed = static_cast<int>(std::lround(std::clamp(
-        frame->speed_meters_per_second * factor, 0.0, 999.0)));
-    const int digit_count =
-        static_cast<int>(std::to_string(std::max(0, speed)).size());
-    const int number_x =
-        margin + speed_padding + (kSpeedDigits - digit_count) * digit_advance;
-    DrawOutlinedNumber(canvas, speed, number_x, row_y, digit_size, kWhite);
-    const int unit_y = row_y + (row_height - 7 * unit_scale) / 2;
-    DrawOutlinedText(canvas, unit, unit_x, unit_y, unit_scale, kMuted);
-  };
-  for (std::size_t index = 0; index < speed_units.size(); ++index) {
-    const bool miles = speed_units[index] == SpeedUnit::kMilesPerHour;
-    draw_speed_row(miles ? 2.2369362920544 : 3.6,
-                   miles ? "MPH" : "KMH",
-                   margin + static_cast<int>(index) * (row_height + row_gap));
-  }
+  DrawReadouts(canvas, *frame, speed_units);
   return canvas.TakePixels();
 }
 
@@ -416,6 +545,9 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
   }
   const int frame_count = static_cast<int>(
       std::ceil(options.duration_seconds * options.frames_per_second));
+  absl::StatusOr<TrackRenderState> track =
+      CreateTrackRenderState(overlay, options.width, options.height);
+  if (!track.ok()) return track.status();
   for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
     std::ostringstream name;
     name << "frame_" << std::setfill('0') << std::setw(6) << frame_index
@@ -428,8 +560,14 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
     if (error) return absl::UnknownError(error.message());
     const double seconds = options.start_seconds +
                            frame_index / options.frames_per_second;
+    absl::StatusOr<OverlayFrameData> frame = SampleOverlayFrame(
+        telemetry, overlay, absl::Seconds(seconds));
+    if (!frame.ok()) return frame.status();
+    absl::StatusOr<TrackFrameSnapshot> track_snapshot =
+        AdvanceTrackRenderState(frame->explored_track_point_count, &*track);
+    if (!track_snapshot.ok()) return track_snapshot.status();
     absl::StatusOr<std::vector<std::uint8_t>> pixels =
-        RenderOverlayFrameRgba(telemetry, overlay, seconds, options.width,
+        RenderOverlayFrameRgba(*frame, *track_snapshot, options.width,
                                options.height, options.speed_units);
     if (!pixels.ok()) return pixels.status();
     Canvas canvas(options.width, options.height);

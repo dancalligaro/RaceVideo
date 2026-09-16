@@ -9,8 +9,10 @@
 #include "absl/flags/parse.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 
-ABSL_FLAG(std::string, input, "", "Path to the input GoPro MP4 file");
+ABSL_FLAG(std::string, input, "",
+          "Path to an input GoPro MP4 file; repeat for ordered chapters");
 ABSL_FLAG(std::string, input_list, "",
           "Path to an ordered list of sequential GoPro MP4 files");
 ABSL_FLAG(bool, inspect, false, "Inspect the embedded GoPro metadata");
@@ -48,6 +50,47 @@ ABSL_FLAG(std::string, speed_unit, "",
           "hides speed");
 
 namespace racevideo {
+
+namespace {
+
+absl::StatusOr<std::vector<std::filesystem::path>> ExtractInputPaths(
+    int argc, char* argv[], std::vector<char*>* remaining_arguments) {
+  std::vector<std::filesystem::path> paths;
+  remaining_arguments->reserve(argc);
+  remaining_arguments->push_back(argv[0]);
+  bool end_of_flags = false;
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if (end_of_flags) {
+      remaining_arguments->push_back(argv[index]);
+      continue;
+    }
+    if (argument == "--") {
+      end_of_flags = true;
+      remaining_arguments->push_back(argv[index]);
+      continue;
+    }
+    if (absl::StartsWith(argument, "--input=")) {
+      const std::string path = argument.substr(std::string("--input=").size());
+      if (path.empty()) {
+        return absl::InvalidArgumentError("--input requires a nonempty path");
+      }
+      paths.emplace_back(path);
+      continue;
+    }
+    if (argument == "--input") {
+      if (index + 1 >= argc || argv[index + 1][0] == '-') {
+        return absl::InvalidArgumentError("--input requires a path");
+      }
+      paths.emplace_back(argv[++index]);
+      continue;
+    }
+    remaining_arguments->push_back(argv[index]);
+  }
+  return paths;
+}
+
+}  // namespace
 
 absl::StatusOr<std::vector<SpeedUnit>> ParseSpeedUnits(std::string value) {
   absl::AsciiStrToLower(&value);
@@ -88,17 +131,21 @@ absl::StatusOr<VideoPipeline> ParseVideoPipeline(std::string value) {
 }
 
 absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
-  std::vector<char*> positional_arguments = absl::ParseCommandLine(argc, argv);
+  std::vector<char*> remaining_arguments;
+  absl::StatusOr<std::vector<std::filesystem::path>> input_paths =
+      ExtractInputPaths(argc, argv, &remaining_arguments);
+  if (!input_paths.ok()) return input_paths.status();
+  std::vector<char*> positional_arguments = absl::ParseCommandLine(
+      static_cast<int>(remaining_arguments.size()), remaining_arguments.data());
   if (positional_arguments.size() > 1) {
     return absl::InvalidArgumentError(
         "positional arguments are not supported; use --input=<path>");
   }
 
-  const std::string input = absl::GetFlag(FLAGS_input);
   const std::string input_list = absl::GetFlag(FLAGS_input_list);
   const std::string inspect_telemetry =
       absl::GetFlag(FLAGS_inspect_telemetry);
-  const int media_input_count = static_cast<int>(!input.empty()) +
+  const int media_input_count = static_cast<int>(!input_paths->empty()) +
                                 static_cast<int>(!input_list.empty());
   if ((!inspect_telemetry.empty() && media_input_count != 0) ||
       (inspect_telemetry.empty() && media_input_count != 1)) {
@@ -112,6 +159,11 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   if (!input_list.empty() && render_frames.empty() && output_video.empty()) {
     return absl::InvalidArgumentError(
         "--input_list requires --render_frames or --output_video");
+  }
+  if (input_paths->size() > 1 && render_frames.empty() &&
+      output_video.empty()) {
+    return absl::InvalidArgumentError(
+        "multiple --input values require --render_frames or --output_video");
   }
   const double start_seconds = absl::GetFlag(FLAGS_start_seconds);
   const double duration_seconds = absl::GetFlag(FLAGS_duration_seconds);
@@ -179,7 +231,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
     }
   }
 
-  return Options{.input_path = input,
+  return Options{.input_paths = std::move(*input_paths),
                  .input_list_path = input_list,
                  .inspect = absl::GetFlag(FLAGS_inspect),
                  .inspect_video = absl::GetFlag(FLAGS_inspect_video),

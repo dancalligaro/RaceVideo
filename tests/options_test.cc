@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/flags/reflection.h"
 #include "absl/status/status.h"
 #include "gtest/gtest.h"
 
@@ -10,12 +11,46 @@ namespace racevideo {
 namespace {
 
 TEST(ParseOptionsTest, RequiresInput) {
+  absl::FlagSaver flag_saver;
   char program[] = "racevideo";
   char* argv[] = {program};
 
   const absl::StatusOr<Options> options = ParseOptions(1, argv);
 
   EXPECT_EQ(options.status().code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST(ParseOptionsTest, PreservesRepeatedInputOrder) {
+  absl::FlagSaver flag_saver;
+  char program[] = "racevideo";
+  char input_one[] = "--input=GX010001.MP4";
+  char input_two_flag[] = "--input";
+  char input_two_path[] = "GX020001.MP4";
+  char output[] = "--output_video=combined.mp4";
+  char axes[] = "--imu_axis_order=ZXY";
+  char* argv[] = {program, input_one, input_two_flag, input_two_path, output,
+                  axes};
+
+  const absl::StatusOr<Options> options = ParseOptions(6, argv);
+
+  ASSERT_TRUE(options.ok()) << options.status();
+  EXPECT_EQ(options->input_paths,
+            std::vector<std::filesystem::path>(
+                {"GX010001.MP4", "GX020001.MP4"}));
+}
+
+TEST(ParseOptionsTest, MultipleInputsRequireRendering) {
+  absl::FlagSaver flag_saver;
+  char program[] = "racevideo";
+  char input_one[] = "--input=GX010001.MP4";
+  char input_two[] = "--input=GX020001.MP4";
+  char* argv[] = {program, input_one, input_two};
+
+  const absl::StatusOr<Options> options = ParseOptions(3, argv);
+
+  EXPECT_EQ(options.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_NE(options.status().message().find("multiple --input values"),
+            std::string::npos);
 }
 
 TEST(ParseSpeedUnitsTest, SupportsHiddenAndEveryDocumentedOrdering) {

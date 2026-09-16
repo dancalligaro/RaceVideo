@@ -288,8 +288,19 @@ being used.
 ### Sequential GoPro chapters
 
 RaceVideo can treat several consecutive GoPro chapter files as one continuous
-recording. Create a text file containing one video path per line, in playback
-order:
+recording. Repeat `--input` in playback order:
+
+```powershell
+racevideo.exe --input="GX010001.MP4" --input="GX020001.MP4" `
+  --input="GX030001.MP4" --imu_axis_order="ZXY" `
+  --output_video="complete-drive.mp4" --speed_unit="kmh,mph"
+```
+
+The order of the `--input` arguments is preserved. A comma-separated value is
+not supported because commas are valid filename characters.
+
+For long lists, create a text file containing one video path per line, in
+playback order:
 
 ```text
 GX010001.MP4
@@ -298,7 +309,7 @@ GX030001.MP4
 ```
 
 Blank lines are ignored. Relative paths are resolved from the directory that
-contains the list file. Then pass the list instead of `--input`:
+contains the list file. Pass the list instead of `--input`:
 
 ```powershell
 racevideo.exe --input_list="chapters.txt" --imu_axis_order="ZXY" `

@@ -11,7 +11,7 @@
 namespace racevideo {
 
 struct Options {
-  std::filesystem::path input_path;
+  std::vector<std::filesystem::path> input_paths;
   std::filesystem::path input_list_path;
   bool inspect = false;
   bool inspect_video = false;

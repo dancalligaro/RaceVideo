@@ -175,12 +175,10 @@ absl::StatusOr<CombinedChapters> PrepareChapters(
   return combined;
 }
 
-absl::Status RunChapterList(const Options& options) {
-  absl::StatusOr<std::vector<std::filesystem::path>> paths =
-      ReadInputList(options.input_list_path);
-  if (!paths.ok()) return paths.status();
+absl::Status RunChapters(const Options& options,
+                         const std::vector<std::filesystem::path>& paths) {
   absl::StatusOr<CombinedChapters> combined =
-      PrepareChapters(*paths, options.imu_axis_order);
+      PrepareChapters(paths, options.imu_axis_order);
   if (!combined.ok()) return combined.status();
   if (options.start_seconds >= combined->video.duration_seconds) {
     return absl::OutOfRangeError(
@@ -312,36 +310,45 @@ absl::Status Run(const Options& options) {
     return absl::OkStatus();
   }
 
-  if (!options.input_list_path.empty()) return RunChapterList(options);
+  if (!options.input_list_path.empty()) {
+    absl::StatusOr<std::vector<std::filesystem::path>> paths =
+        ReadInputList(options.input_list_path);
+    if (!paths.ok()) return paths.status();
+    return RunChapters(options, *paths);
+  }
+  if (options.input_paths.size() > 1) {
+    return RunChapters(options, options.input_paths);
+  }
 
+  const std::filesystem::path& input_path = options.input_paths.front();
   std::error_code error;
-  const bool exists = std::filesystem::exists(options.input_path, error);
+  const bool exists = std::filesystem::exists(input_path, error);
   if (error) {
     return absl::UnknownError(absl::StrCat(
-        "cannot inspect input path: ", options.input_path.string(), ": ",
+        "cannot inspect input path: ", input_path.string(), ": ",
         error.message()));
   }
   if (!exists) {
     return absl::NotFoundError(
-        absl::StrCat("input file not found: ", options.input_path.string()));
+        absl::StrCat("input file not found: ", input_path.string()));
   }
 
   const bool is_regular_file =
-      std::filesystem::is_regular_file(options.input_path, error);
+      std::filesystem::is_regular_file(input_path, error);
   if (error) {
     return absl::UnknownError(absl::StrCat(
-        "cannot inspect input path: ", options.input_path.string(), ": ",
+        "cannot inspect input path: ", input_path.string(), ": ",
         error.message()));
   }
   if (!is_regular_file) {
     return absl::InvalidArgumentError(
-        absl::StrCat("input is not a file: ", options.input_path.string()));
+        absl::StrCat("input is not a file: ", input_path.string()));
   }
 
   std::cout << "Scanning input video: "
-            << options.input_path.filename().string() << "...\n"
+            << input_path.filename().string() << "...\n"
             << std::flush;
-  absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(options.input_path);
+  absl::StatusOr<GpmfTrackInfo> track = IndexGpmfTrack(input_path);
   if (!track.ok()) return track.status();
 
   const GpmfPayload& last = track->payloads.back();
@@ -353,7 +360,7 @@ absl::Status Run(const Options& options) {
             << "Duration: " << duration_seconds << " seconds\n";
 
   if (options.inspect_video) {
-    const absl::StatusOr<VideoInfo> video = ProbeVideo(options.input_path);
+    const absl::StatusOr<VideoInfo> video = ProbeVideo(input_path);
     if (!video.ok()) return video.status();
     std::cout << "Video dimensions: " << video->width << 'x' << video->height
               << '\n'
@@ -365,7 +372,7 @@ absl::Status Run(const Options& options) {
 
   if (options.inspect) {
     absl::StatusOr<GpmfSummary> summary =
-        InspectGpmf(options.input_path, *track);
+        InspectGpmf(input_path, *track);
     if (!summary.ok()) return summary.status();
     std::cout << "Metadata bytes: " << summary->total_bytes << '\n'
               << "Samples by FourCC:\n";
@@ -376,7 +383,7 @@ absl::Status Run(const Options& options) {
 
   if (!options.extract_gpmf_path.empty()) {
     absl::Status status = ExtractRawGpmf(
-        options.input_path, *track, options.extract_gpmf_path);
+        input_path, *track, options.extract_gpmf_path);
     if (!status.ok()) return status;
     std::cout << "Raw GPMF written to: "
               << options.extract_gpmf_path.string() << '\n';
@@ -384,7 +391,7 @@ absl::Status Run(const Options& options) {
 
   if (!options.export_json_path.empty()) {
     std::error_code equivalent_error;
-    if (std::filesystem::equivalent(options.input_path,
+    if (std::filesystem::equivalent(input_path,
                                     options.export_json_path,
                                     equivalent_error) &&
         !equivalent_error) {
@@ -392,7 +399,7 @@ absl::Status Run(const Options& options) {
           "JSON output path must not overwrite the input video");
     }
     absl::StatusOr<TelemetryData> telemetry =
-        DecodeTelemetry(options.input_path, *track);
+        DecodeTelemetry(input_path, *track);
     if (!telemetry.ok()) return telemetry.status();
     if (!options.imu_axis_order.empty()) {
       const absl::Status normalize_status =
@@ -422,7 +429,7 @@ absl::Status Run(const Options& options) {
 
   if (!options.export_telemetry_path.empty()) {
     std::error_code equivalent_error;
-    if (std::filesystem::equivalent(options.input_path,
+    if (std::filesystem::equivalent(input_path,
                                     options.export_telemetry_path,
                                     equivalent_error) &&
         !equivalent_error) {
@@ -430,7 +437,7 @@ absl::Status Run(const Options& options) {
           "telemetry output path must not overwrite the input video");
     }
     absl::StatusOr<TelemetryData> telemetry =
-        DecodeTelemetry(options.input_path, *track);
+        DecodeTelemetry(input_path, *track);
     if (!telemetry.ok()) return telemetry.status();
     if (!options.imu_axis_order.empty()) {
       const absl::Status normalize_status =
@@ -469,7 +476,7 @@ absl::Status Run(const Options& options) {
           "render start is at or beyond the metadata duration");
     }
     absl::StatusOr<TelemetryData> telemetry =
-        DecodeTelemetry(options.input_path, *track);
+        DecodeTelemetry(input_path, *track);
     if (!telemetry.ok()) return telemetry.status();
     absl::Status status =
         NormalizeInertialAxes(options.imu_axis_order, &*telemetry);
@@ -514,7 +521,7 @@ absl::Status Run(const Options& options) {
       return absl::OutOfRangeError(
           "video render start is at or beyond the metadata duration");
     }
-    absl::StatusOr<VideoInfo> video = ProbeVideo(options.input_path);
+    absl::StatusOr<VideoInfo> video = ProbeVideo(input_path);
     if (!video.ok()) return video.status();
     const double available_duration =
         std::min(duration_seconds, video->duration_seconds) -
@@ -531,7 +538,7 @@ absl::Status Run(const Options& options) {
               << "Selected output duration: "
               << FormatDuration(actual_duration) << '\n';
     absl::StatusOr<TelemetryData> telemetry =
-        DecodeTelemetry(options.input_path, *track);
+        DecodeTelemetry(input_path, *track);
     if (!telemetry.ok()) return telemetry.status();
     absl::Status status =
         NormalizeInertialAxes(options.imu_axis_order, &*telemetry);
@@ -547,7 +554,7 @@ absl::Status Run(const Options& options) {
     if (!overlay.ok()) return overlay.status();
     status = EncodeOverlayVideo(
         *telemetry, *overlay, *video,
-        {.chapters = {{.path = options.input_path,
+        {.chapters = {{.path = input_path,
                        .duration_seconds = video->duration_seconds}},
          .output_path = options.output_video_path,
          .start_seconds = options.start_seconds,

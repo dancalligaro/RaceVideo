@@ -6,6 +6,68 @@ rendering racing overlays into video through FFmpeg.
 RaceVideo is an independent project and is not affiliated with, sponsored by,
 or endorsed by GoPro, Inc. GoPro is a trademark of GoPro, Inc.
 
+## Run the prebuilt Linux executable
+
+The repository includes an optimized [Linux x86-64 executable](bin/linux-x86_64/racevideo)
+(AMD64, for Intel/AMD 64-bit CPUs), built on Debian 13 with GCC 14.2.
+It requires glibc 2.38 or newer and `libstdc++.so.6` providing
+`GLIBCXX_3.4.32` (GCC 13.2 or newer runtime). It has been smoke-tested on
+Debian 13; other distributions must provide compatible runtimes. Older systems
+and ARM64 require a source build using the development instructions below.
+
+On Debian 13, install the runtime dependencies:
+
+```sh
+sudo apt-get update
+sudo apt-get install libc6 libstdc++6 libgcc-s1 ffmpeg
+```
+
+FFmpeg supplies both `ffmpeg` and `ffprobe`; both must be on `PATH`.
+Software video encoding requires FFmpeg with `libx264`. Abseil, Protocol
+Buffers, utf8-range, the GoPro parser, and stb are linked into the executable;
+no separate packages for those libraries or build tools are needed.
+
+From a downloaded or cloned copy of this repository:
+
+```sh
+chmod +x bin/linux-x86_64/racevideo
+./bin/linux-x86_64/racevideo --helpfull
+./bin/linux-x86_64/racevideo --input="video.mp4" --inspect_video
+./bin/linux-x86_64/racevideo --input="video.mp4" --imu_axis_order="ZXY" \
+  --output_video="preview.mp4" --duration_seconds=10 --output_width=400 \
+  --speed_unit=kmh
+```
+
+Use the correct `--imu_axis_order` for your camera; `ZXY` is an example.
+To install the executable on your system `PATH`:
+
+```sh
+sudo install -m 0755 bin/linux-x86_64/racevideo /usr/local/bin/racevideo
+racevideo --helpfull
+```
+
+Replace the installed file with the same command when updating. Remove it
+with `sudo rm /usr/local/bin/racevideo` to uninstall. Optional VA-API and NVIDIA
+hardware encoding require the drivers and FFmpeg capabilities described in
+[Linux development setup](#linux).
+
+The executable is distributed with [LICENSE](LICENSE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including the linked
+third-party license texts. Preserve these notices when redistributing it.
+
+To rebuild the checked-in executable on x86-64 Linux with GCC, set
+`VCPKG_ROOT` to your bootstrapped vcpkg checkout and run:
+
+```sh
+python3 scripts/build_linux_binary.py
+```
+
+This builds the application and its static dependencies with source-path
+remapping, strips the executable, and checks for local build paths before
+replacing `bin/linux-x86_64/racevideo`. It requires the Linux build tools below,
+Python 3, and `strip`/`strings` from binutils. Recheck runtime requirements
+when changing the compiler or build distribution.
+
 ## Development setup
 
 ### macOS

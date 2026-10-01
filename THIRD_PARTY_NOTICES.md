@@ -62,7 +62,8 @@ Source: <https://github.com/google/googletest>
 Copyright 2008 Google Inc. All rights reserved.
 
 Protocol Buffers is distributed under the BSD 3-Clause license. Source and
-license text: <https://github.com/protocolbuffers/protobuf>
+license text: [Protocol Buffers license](licenses/protobuf.txt).
+Source: <https://github.com/protocolbuffers/protobuf>
 
 The generated C++ files are produced from RaceVideo's own `.proto` schema;
 the Protocol Buffers runtime retains its upstream license.
@@ -70,8 +71,7 @@ the Protocol Buffers runtime retains its upstream license.
 ## External FFmpeg dependency
 
 FFmpeg is not included in or distributed with RaceVideo. It is a user-supplied
-external executable that future RaceVideo versions will invoke as a separate
-process. RaceVideo release artifacts must not bundle, download, install, or
+external executable that RaceVideo invokes as a separate process. RaceVideo release artifacts must not bundle, download, install, or
 redistribute FFmpeg.
 
 The user's FFmpeg build remains separately licensed. FFmpeg is generally
@@ -90,3 +90,14 @@ License.
 Copyright Sean Barrett and contributors.
 
 Source and license: <https://github.com/nothings/stb>
+
+A copy of the MIT license is included in [licenses/stb.txt](licenses/stb.txt).
+
+## utf8-range
+
+The Protocol Buffers runtime includes utf8-range.
+
+Copyright (c) 2019 Yibo Cai; Copyright 2022 Google LLC.
+
+Licensed under the MIT License; see [licenses/utf8-range.txt](licenses/utf8-range.txt).
+Source: <https://github.com/protocolbuffers/utf8_range>

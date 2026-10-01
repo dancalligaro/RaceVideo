@@ -39,6 +39,24 @@ TEST(ParseOptionsTest, PreservesRepeatedInputOrder) {
                 {"GX010001.MP4", "GX020001.MP4"}));
 }
 
+TEST(ParseOptionsTest, SelectsVaapiEncoderAndCustomDevice) {
+  absl::FlagSaver flag_saver;
+  char program[] = "racevideo";
+  char input[] = "--input=video.mp4";
+  char output[] = "--output_video=overlay.mp4";
+  char axes[] = "--imu_axis_order=ZXY";
+  char encoder[] = "--video_encoder=vaapi";
+  char device[] = "--vaapi_device=/dev/dri/renderD129";
+  char* argv[] = {program, input, output, axes, encoder, device};
+
+  const auto options = ParseOptions(6, argv);
+
+  ASSERT_TRUE(options.ok()) << options.status();
+  EXPECT_EQ(options->video_encoder, VideoEncoder::kVaapi);
+  EXPECT_EQ(options->video_pipeline, VideoPipeline::kSoftware);
+  EXPECT_EQ(options->vaapi_device, "/dev/dri/renderD129");
+}
+
 TEST(ParseOptionsTest, MultipleInputsRequireRendering) {
   absl::FlagSaver flag_saver;
   char program[] = "racevideo";
@@ -80,6 +98,7 @@ TEST(ParseSpeedUnitsTest, IsCaseInsensitiveAndRejectsOtherLists) {
 TEST(ParseVideoEncoderTest, SupportsDocumentedEncoders) {
   EXPECT_EQ(*ParseVideoEncoder("software"), VideoEncoder::kSoftware);
   EXPECT_EQ(*ParseVideoEncoder("NVIDIA"), VideoEncoder::kNvidia);
+  EXPECT_EQ(*ParseVideoEncoder("VAAPI"), VideoEncoder::kVaapi);
   EXPECT_EQ(*ParseVideoEncoder("VideoToolbox"),
             VideoEncoder::kVideoToolbox);
   EXPECT_EQ(ParseVideoEncoder("automatic").status().code(),

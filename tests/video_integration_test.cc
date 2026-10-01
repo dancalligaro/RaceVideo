@@ -1,6 +1,8 @@
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "absl/time/time.h"
@@ -42,6 +44,10 @@ class VideoIntegrationTest : public testing::TestWithParam<VideoEncodeCase> {
 
 TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   const VideoEncodeCase test_case = GetParam();
+  if (test_case.encoder == VideoEncoder::kVaapi &&
+      std::getenv("RACEVIDEO_TEST_VAAPI_DEVICE") == nullptr) {
+    GTEST_SKIP() << "Set RACEVIDEO_TEST_VAAPI_DEVICE to enable GPU tests";
+  }
   const auto ffmpeg = FindExecutableOnPath("ffmpeg");
   ASSERT_TRUE(ffmpeg.ok()) << ffmpeg.status();
   ASSERT_TRUE(FindExecutableOnPath("ffprobe").ok());
@@ -97,6 +103,9 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
       .output_width = 160,
       .video_encoder = test_case.encoder,
       .video_pipeline = VideoPipeline::kSoftware,
+      .vaapi_device = test_case.encoder == VideoEncoder::kVaapi
+                          ? std::getenv("RACEVIDEO_TEST_VAAPI_DEVICE")
+                          : "/dev/dri/renderD128",
       .speed_units = {SpeedUnit::kKilometersPerHour}};
   const auto status = EncodeOverlayVideo(telemetry, *overlay, *video, options);
   ASSERT_TRUE(status.ok()) << status;
@@ -114,6 +123,26 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   EXPECT_EQ(std::filesystem::file_size(options.output_path), previous_size);
 }
 
+#ifdef __linux__
+TEST(VideoEncoderValidationTest, RejectsRelativeVaapiDeviceBeforeEncoding) {
+  VideoEncodeOptions options{
+      .chapters = {{"unused.mp4", 1.0}},
+      .output_path = "unused-output.mp4",
+      .start_seconds = 0.0,
+      .duration_seconds = 1.0,
+      .output_width = 0,
+      .video_encoder = VideoEncoder::kVaapi,
+      .video_pipeline = VideoPipeline::kSoftware,
+      .vaapi_device = "renderD128"};
+  const VideoInfo video{.width = 320, .height = 180};
+  const auto status = EncodeOverlayVideo({}, {}, video, options);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_NE(status.message().find("absolute DRM render device"),
+            std::string_view::npos);
+  EXPECT_FALSE(std::filesystem::exists(options.output_path));
+}
+#endif
+
 INSTANTIATE_TEST_SUITE_P(
     Software, VideoIntegrationTest,
     testing::Values(VideoEncodeCase{false, VideoEncoder::kSoftware},
@@ -122,6 +151,16 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.multiple_chapters ? "MultipleChapters"
                                           : "SingleChapter";
     });
+
+#ifdef __linux__
+INSTANTIATE_TEST_SUITE_P(
+    Vaapi, VideoIntegrationTest,
+    testing::Values(VideoEncodeCase{false, VideoEncoder::kVaapi},
+                    VideoEncodeCase{true, VideoEncoder::kVaapi}),
+    [](const testing::TestParamInfo<VideoEncodeCase>& info) {
+      return info.param.multiple_chapters ? "MultipleChapters" : "SingleChapter";
+    });
+#endif
 
 #ifdef __APPLE__
 INSTANTIATE_TEST_SUITE_P(

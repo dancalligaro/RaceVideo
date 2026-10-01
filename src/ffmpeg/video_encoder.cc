@@ -308,11 +308,26 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
   absl::StatusOr<VideoDimensions> output_dimensions =
       DetermineOutputDimensions(video, options.output_width);
   if (!output_dimensions.ok()) return output_dimensions.status();
-  if (options.video_encoder == VideoEncoder::kNvidia ||
-      options.video_encoder == VideoEncoder::kVideoToolbox) {
-    const std::string_view encoder_name =
-        options.video_encoder == VideoEncoder::kNvidia ? "h264_nvenc"
-                                                       : "h264_videotoolbox";
+  if (options.video_encoder == VideoEncoder::kVaapi) {
+#ifndef __linux__
+    return absl::FailedPreconditionError("VA-API encoding requires Linux");
+#endif
+    if (!options.vaapi_device.is_absolute()) {
+      return absl::InvalidArgumentError(
+          "--vaapi_device must be an absolute DRM render device path");
+    }
+    if (options.video_pipeline != VideoPipeline::kSoftware) {
+      return absl::InvalidArgumentError(
+          "VA-API encoding requires --video_pipeline=software");
+    }
+  }
+  if (options.video_encoder != VideoEncoder::kSoftware) {
+    std::string_view encoder_name = "h264_videotoolbox";
+    if (options.video_encoder == VideoEncoder::kNvidia) {
+      encoder_name = "h264_nvenc";
+    } else if (options.video_encoder == VideoEncoder::kVaapi) {
+      encoder_name = "h264_vaapi";
+    }
     absl::StatusOr<ProcessResult> encoders = RunProcessAndCaptureOutput(
         *ffmpeg, {"-hide_banner", "-encoders"});
     if (!encoders.ok()) return encoders.status();
@@ -321,6 +336,16 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
       return absl::FailedPreconditionError(
           absl::StrCat("the installed FFmpeg does not provide the ",
                        encoder_name, " encoder"));
+    }
+  }
+  if (options.video_encoder == VideoEncoder::kVaapi) {
+    const auto filters =
+        RunProcessAndCaptureOutput(*ffmpeg, {"-hide_banner", "-filters"});
+    if (!filters.ok()) return filters.status();
+    if (filters->exit_code != 0 ||
+        filters->output.find(" hwupload ") == std::string::npos) {
+      return absl::FailedPreconditionError(
+          "the installed FFmpeg does not provide the hwupload filter");
     }
   }
   if (options.video_pipeline == VideoPipeline::kNvidia) {
@@ -373,6 +398,11 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
                                 "[base][1:v:0]overlay=0:0:format=auto[v]")
                  : "[0:v:0][1:v:0]overlay=0:0:format=auto[v]";
   }
+  if (options.video_encoder == VideoEncoder::kVaapi) {
+    // Composite in software, then upload NV12 frames to the VA-API encoder.
+    filter.replace(filter.size() - 3, 3, "[composited]");
+    filter += ";[composited]format=nv12,hwupload[v]";
+  }
   std::filesystem::path concat_manifest;
   std::vector<std::string> arguments = {
       "-hide_banner", "-loglevel", "error", "-nostdin"};
@@ -381,6 +411,10 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
                      {"-init_hw_device", "cuda=cuda:0", "-filter_hw_device",
                       "cuda", "-hwaccel", "cuda", "-hwaccel_output_format",
                       "cuda"});
+  }
+  if (options.video_encoder == VideoEncoder::kVaapi) {
+    arguments.insert(arguments.end(),
+                     {"-vaapi_device", PathAsUtf8(options.vaapi_device)});
   }
   arguments.insert(arguments.end(),
                    {"-ss", Number(options.start_seconds), "-t",
@@ -405,6 +439,9 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
     arguments.insert(arguments.end(),
                      {"-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
                       "-cq", "19", "-b:v", "0"});
+  } else if (options.video_encoder == VideoEncoder::kVaapi) {
+    arguments.insert(arguments.end(),
+                     {"-c:v", "h264_vaapi", "-profile:v", "high", "-qp", "19"});
   } else if (options.video_encoder == VideoEncoder::kVideoToolbox) {
     arguments.insert(arguments.end(),
                      {"-c:v", "h264_videotoolbox", "-profile:v", "high",
@@ -413,9 +450,10 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
     arguments.insert(arguments.end(),
                      {"-c:v", "libx264", "-preset", "medium", "-crf", "18"});
   }
-  if (options.video_pipeline == VideoPipeline::kSoftware) {
+  if (options.video_pipeline == VideoPipeline::kSoftware &&
+      options.video_encoder != VideoEncoder::kVaapi) {
     arguments.insert(arguments.end(), {"-pix_fmt", "yuv420p"});
-  } else {
+  } else if (options.video_pipeline == VideoPipeline::kNvidia) {
     // CUDA frames are allocated on 32-pixel boundaries. overlay_cuda exposes
     // that allocation size to NVENC, so restore the requested display size in
     // the H.264 cropping metadata.

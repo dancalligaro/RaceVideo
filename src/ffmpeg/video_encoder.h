@@ -33,6 +33,7 @@ struct VideoEncodeOptions {
   int output_width;
   VideoEncoder video_encoder;
   VideoPipeline video_pipeline;
+  std::filesystem::path vaapi_device = "/dev/dri/renderD128";
   std::vector<SpeedUnit> speed_units;
 };
 

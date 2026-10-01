@@ -58,10 +58,51 @@ options require NVIDIA hardware and are not supported on Apple Silicon.
 
 ### Linux
 
-Use a C++20 compiler, CMake 3.28+, Ninja, a bootstrapped standalone vcpkg
-checkout, and FFmpeg with `libx264`. Follow the macOS configure/build commands
-with `-DVCPKG_TARGET_TRIPLET=x64-linux` (or `arm64-linux` on ARM64).
-macOS and Linux share the POSIX process backend.
+On Debian/Ubuntu, install the build tools and FFmpeg runtime:
+
+```sh
+sudo apt-get update
+sudo apt-get install build-essential cmake ninja-build pkg-config git curl zip unzip tar ffmpeg
+git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg"
+"$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+export VCPKG_ROOT="$HOME/vcpkg"
+cmake --preset debug -DVCPKG_TARGET_TRIPLET=x64-linux -DRACEVIDEO_FFMPEG_TESTS=ON
+cmake --build --preset debug
+ctest --preset debug
+cmake --preset release -DVCPKG_TARGET_TRIPLET=x64-linux
+cmake --build --preset release
+```
+
+CMake 3.28+ and a C++20 compiler are required; upgrade CMake separately if your
+distribution provides an older version. Use `arm64-linux` on ARM64.
+Linux and macOS share the POSIX process backend. FFmpeg and ffprobe must be
+on `PATH`; FFmpeg must include `libx264` for software encoding.
+
+For Intel and AMD hardware H.264 encoding, use VA-API:
+
+```sh
+./build/release/racevideo --input="video.mp4" --imu_axis_order="ZXY" \
+  --output_video="preview.mp4" --duration_seconds=10 --output_width=400 \
+  --video_encoder=vaapi --vaapi_device=/dev/dri/renderD128 --speed_unit=kmh
+```
+
+VA-API requires FFmpeg with `h264_vaapi` and `hwupload`, a GPU supporting H.264
+encoding, and its installed VA-API driver (typically Intel's media driver or
+Mesa's VA-API driver for AMD). Your user must have access to the DRM render
+node; distributions commonly manage this through the `render` group. Use
+`vainfo --display drm --device /dev/dri/renderD128` to check driver support.
+Select another node with `--vaapi_device` on systems with multiple GPUs.
+The default device is `/dev/dri/renderD128`. Decode, scaling, and transparent
+overlay composition run on the CPU; the result is converted to NV12 and
+uploaded for hardware encoding. Use `--video_pipeline=software` (the default).
+Missing encoders, devices, or driver support produce an error; RaceVideo does
+not silently fall back to software. See [FFmpeg's hardware device documentation](https://ffmpeg.org/ffmpeg.html#Advanced-Video-options).
+
+For NVIDIA GPUs, the existing `--video_encoder=nvidia` also works on Linux
+with the NVIDIA driver and an NVENC-enabled FFmpeg build. Add
+`--video_pipeline=nvidia` to enable CUDA decode, scale, and overlay processing;
+this also requires FFmpeg's CUDA filters as described below.
+Use `ffmpeg -encoders` and `ffmpeg -filters` to inspect your installed build.
 
 ### Windows
 
@@ -105,7 +146,10 @@ Set `-DRACEVIDEO_FFMPEG_TESTS=ON` during configuration to also generate test
 videos and verify software overlay encoding, audio preservation, chapter
 concatenation, and refusal to overwrite an existing output. These integration
 tests require both `ffmpeg` and `ffprobe` on `PATH`; they do not need GoPro files.
-CI runs these tests on Windows, macOS, and Linux.
+CI runs these tests on Windows, macOS, and Linux. On Linux, set
+`RACEVIDEO_TEST_VAAPI_DEVICE=/dev/dri/renderD128` when running `ctest` to also
+exercise VA-API encoding for single and multiple chapters; these tests are
+skipped by default because hosted CI runners do not provide a GPU.
 
 External tools are started directly without a command shell. Executable lookup
 uses absolute `PATH` directories and skips relative or empty entries. On POSIX,
@@ -251,7 +295,9 @@ error when the installed FFmpeg does not provide it. On macOS,
 `--video_encoder="videotoolbox"` uses `h264_videotoolbox` for hardware H.264
 encoding with the default software pipeline. It reports an error if FFmpeg does
 not provide the encoder or the system cannot create a hardware encoding
-session. `--output_width=0`, the
+session. On Linux, `--video_encoder="vaapi"` uses `h264_vaapi` with the
+software pipeline; see the Linux setup above for driver and device requirements.
+`--output_width=0`, the
 default, preserves the source resolution. Output widths must be even and at
 least 160 pixels; RaceVideo does not upscale the source video.
 

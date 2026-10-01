@@ -42,7 +42,9 @@ ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
 ABSL_FLAG(int, output_width, 0,
           "Output video width; zero preserves the source resolution");
 ABSL_FLAG(std::string, video_encoder, "software",
-          "Video encoder: software, nvidia, or videotoolbox");
+          "Video encoder: software, nvidia, videotoolbox, or vaapi");
+ABSL_FLAG(std::string, vaapi_device, "/dev/dri/renderD128",
+          "VA-API DRM render device for Linux hardware encoding");
 ABSL_FLAG(std::string, video_pipeline, "software",
           "Video decode, scale, and overlay pipeline: software or nvidia");
 ABSL_FLAG(std::string, speed_unit, "",
@@ -118,8 +120,9 @@ absl::StatusOr<VideoEncoder> ParseVideoEncoder(std::string value) {
   if (value == "software") return VideoEncoder::kSoftware;
   if (value == "nvidia") return VideoEncoder::kNvidia;
   if (value == "videotoolbox") return VideoEncoder::kVideoToolbox;
+  if (value == "vaapi") return VideoEncoder::kVaapi;
   return absl::InvalidArgumentError(
-      "--video_encoder must be software, nvidia, or videotoolbox");
+      "--video_encoder must be software, nvidia, videotoolbox, or vaapi");
 }
 
 absl::StatusOr<VideoPipeline> ParseVideoPipeline(std::string value) {
@@ -251,6 +254,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .output_width = output_width,
                  .video_encoder = *video_encoder,
                  .video_pipeline = *video_pipeline,
+                 .vaapi_device = absl::GetFlag(FLAGS_vaapi_device),
                  .speed_units = std::move(*speed_units)};
 }
 

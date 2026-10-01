@@ -249,6 +249,7 @@ absl::Status RunChapters(const Options& options,
          .output_width = options.output_width,
          .video_encoder = options.video_encoder,
          .video_pipeline = options.video_pipeline,
+         .vaapi_device = options.vaapi_device,
          .speed_units = options.speed_units});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "
@@ -577,6 +578,7 @@ absl::Status Run(const Options& options) {
          .output_width = options.output_width,
          .video_encoder = options.video_encoder,
          .video_pipeline = options.video_pipeline,
+         .vaapi_device = options.vaapi_device,
          .speed_units = options.speed_units});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "

@@ -1,0 +1,9 @@
+#ifndef RACEVIDEO_BUILD_INFO_H_
+#define RACEVIDEO_BUILD_INFO_H_
+
+namespace racevideo {
+inline constexpr char kVersion[] = "@VERSION@";
+inline constexpr char kBuildId[] = "@BUILD_ID@";
+}  // namespace racevideo
+
+#endif  // RACEVIDEO_BUILD_INFO_H_

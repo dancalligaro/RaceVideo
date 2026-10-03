@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(RaceVideo VERSION 0.1.0 LANGUAGES C CXX)
+project(RaceVideo VERSION 0.1 LANGUAGES C CXX)
 
 option(RACEVIDEO_BUILD_TESTS "Build RaceVideo tests" ON)
 option(RACEVIDEO_FFMPEG_TESTS "Run integration tests requiring FFmpeg on PATH" OFF)
@@ -111,13 +111,33 @@ target_include_directories(
   racevideo_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
 
 add_executable(racevideo src/cli/main.cc)
+find_package(Git QUIET)
+# Refresh on every build, including commits without a CMake reconfigure.
+add_custom_target(racevideo_build_info
+  COMMAND ${CMAKE_COMMAND}
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "-DVERSION=${PROJECT_VERSION}"
+    "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake"
+  BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h"
+  VERBATIM)
+add_dependencies(racevideo racevideo_build_info)
+target_include_directories(racevideo PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(
   racevideo
   PRIVATE racevideo_core racevideo_options absl::flags_parse absl::log
-          absl::log_initialize absl::status)
+          absl::log_initialize absl::status absl::flags_usage)
 
 add_executable(racevideo_overlay_benchmark tools/overlay_benchmark.cc)
 target_link_libraries(racevideo_overlay_benchmark PRIVATE racevideo_core racevideo_options)
+
+add_library(racevideo_session_commands tools/session_commands.cc)
+target_include_directories(racevideo_session_commands PUBLIC tools)
+target_link_libraries(racevideo_session_commands PUBLIC racevideo_options
+  absl::statusor absl::strings)
+add_executable(racevideo_commands tools/session_commands_main.cc)
+target_link_libraries(racevideo_commands PRIVATE racevideo_session_commands)
 
 if(RACEVIDEO_BUILD_TESTS)
   include(CTest)
@@ -143,6 +163,11 @@ if(RACEVIDEO_BUILD_TESTS)
     PRIVATE racevideo_core racevideo_options GTest::gtest_main)
 
   include(GoogleTest)
+  add_executable(racevideo_commands_tests tests/session_commands_test.cc)
+  target_link_libraries(racevideo_commands_tests PRIVATE
+    racevideo_session_commands GTest::gtest_main)
+  gtest_discover_tests(racevideo_commands_tests DISCOVERY_MODE PRE_TEST
+    PROPERTIES TIMEOUT 60)
   add_executable(racevideo_process_helper tests/process_helper.cc)
   target_link_libraries(racevideo_process_helper
     PRIVATE racevideo_options Threads::Threads)

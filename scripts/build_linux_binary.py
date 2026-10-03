@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the public Linux x86-64 executable without local source paths."""
+"""Build the public Linux x86-64 executables without local source paths."""
 
 import os
 from pathlib import Path
@@ -46,18 +46,21 @@ def main():
         "-DCMAKE_BUILD_TYPE=Release", "-DRACEVIDEO_BUILD_TESTS=OFF",
         f"-DCMAKE_C_FLAGS={flags}", f"-DCMAKE_CXX_FLAGS={flags}"], check=True)
     subprocess.run(["cmake", "--build", str(build), "--parallel", "2"], check=True)
-    candidate = build / "racevideo-stripped"
-    subprocess.run(["strip", "--strip-unneeded", "-o", str(candidate),
-                    str(build / "racevideo")], check=True)
-    strings = subprocess.check_output(["strings", str(candidate)], text=True)
-    if (any(str(path) + "/" in strings for path, _ in mappings)
-            or any(prefix in strings for prefix in ("/home/", "/tmp/", "/root/"))):
-        raise SystemExit("Local paths remain; the published binary was not replaced.")
-    destination = root / "bin/linux-x86_64/racevideo"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(candidate, destination)
-    destination.chmod(0o755)
-    print(f"Built and verified {destination}")
+    candidates = []
+    for name in ("racevideo", "racevideo_commands"):
+        candidate = build / f"{name}-stripped"
+        subprocess.run(["strip", "--strip-unneeded", "-o", str(candidate),
+                        str(build / name)], check=True)
+        strings = subprocess.check_output(["strings", str(candidate)], text=True)
+        if (any(str(path) + "/" in strings for path, _ in mappings)
+                or any(prefix in strings for prefix in ("/home/", "/tmp/", "/root/"))):
+            raise SystemExit(f"Local paths remain in {name}; binaries were not replaced.")
+        candidates.append((candidate, root / "bin/linux-x86_64" / name))
+    for candidate, destination in candidates:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(candidate, destination)
+        destination.chmod(0o755)
+        print(f"Built and verified {destination}")
 
 
 if __name__ == "__main__":

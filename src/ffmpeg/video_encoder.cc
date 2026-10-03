@@ -468,8 +468,7 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
   }
   arguments.insert(arguments.end(),
                    {"-c:a", "copy", "-t", Number(options.duration_seconds),
-                    "-movflags", "+faststart", "-n",
-                    PathAsUtf8(options.output_path)});
+                    "-n", PathAsUtf8(options.output_path)});
 
   VideoInfo output_video = video;
   output_video.width = output_dimensions->width;

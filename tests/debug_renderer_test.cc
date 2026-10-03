@@ -115,7 +115,9 @@ TEST(CachedOverlayRendererTest, MatchesReferenceAcrossFrameChangesAndLayouts) {
             std::equal(actual.begin(), actual.end(), reference->begin()))
             << width << 'x' << height << " frame " << index << " units "
             << units.size();
-        if (buffer) EXPECT_EQ(actual.data(), buffer);
+        if (buffer) {
+          EXPECT_EQ(actual.data(), buffer);
+        }
         buffer = actual.data();
         // Rendering the same frame twice must not accumulate translucent ink.
         ASSERT_TRUE(renderer.Render(frame, *snapshot).ok());

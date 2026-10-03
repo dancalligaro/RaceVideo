@@ -31,6 +31,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # MSVC setup overrides VCPKG_ROOT with Visual Studio's bundled copy.
+          $env:VCPKG_ROOT = Join-Path $env:GITHUB_WORKSPACE '.build-tools/vcpkg'
+          "VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
           choco install ninja ffmpeg --yes --no-progress
           & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
       - name: Install macOS tools

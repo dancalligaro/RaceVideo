@@ -31,6 +31,7 @@ From a downloaded or cloned copy of this repository:
 
 ```sh
 chmod +x bin/linux-x86_64/racevideo
+./bin/linux-x86_64/racevideo --version
 ./bin/linux-x86_64/racevideo --helpfull
 ./bin/linux-x86_64/racevideo --input="video.mp4" --inspect_video
 ./bin/linux-x86_64/racevideo --input="video.mp4" --imu_axis_order="ZXY" \
@@ -67,6 +68,15 @@ remapping, strips the executable, and checks for local build paths before
 replacing `bin/linux-x86_64/racevideo`. It requires the Linux build tools below,
 Python 3, and `strip`/`strings` from binutils. Recheck runtime requirements
 when changing the compiler or build distribution.
+
+`--version` prints the release version and a build ID, for example
+`RaceVideo 0.1 (build 267efc)`. The ID is the first six characters of Git HEAD
+at build time and refreshes on every build. A `-dirty` suffix means tracked
+source files have uncommitted changes (the distributed `bin/` directory is
+excluded). Builds without Git metadata report `unknown`.
+Bump the version in `project(RaceVideo VERSION ...)` in `CMakeLists.txt` when
+preparing a new release; commits and recompiles refresh the build ID automatically.
+For exact commit traceability, commit source changes before building the binary.
 
 ## Development setup
 

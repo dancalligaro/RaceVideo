@@ -2,8 +2,11 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <string>
 
+#include "absl/flags/usage_config.h"
 #include "absl/log/initialize.h"
+#include "build_info.h"
 #include "absl/status/status.h"
 #include "cli/options.h"
 #include "common/run.h"
@@ -11,6 +14,10 @@
 int main(int argc, char* argv[]) {
   const auto start_time = std::chrono::steady_clock::now();
   absl::InitializeLog();
+  absl::SetFlagsUsageConfig({.version_string = [] {
+    return std::string("RaceVideo ") + racevideo::kVersion + " (build " +
+           racevideo::kBuildId + ")\n";
+  }});
 
   absl::StatusOr<racevideo::Options> options =
       racevideo::ParseOptions(argc, argv);

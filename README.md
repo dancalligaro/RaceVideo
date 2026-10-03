@@ -485,6 +485,85 @@ reads the source chapters directly through its concat demuxer;
 RaceVideo does not create an intermediate joined video. The input files remain
 unchanged.
 
+### Generate commands for a day of sessions
+
+`racevideo_commands` is a small C++ utility that scans a single folder and
+prints a script containing one RaceVideo invocation per recording session.
+The prebuilt Linux utility is `bin/linux-x86_64/racevideo_commands`;
+`scripts/build_linux_binary.py` rebuilds both executables.
+It groups `GOPR9595.MP4`, `GP019595.MP4`, `GP029595.MP4`, etc., in chapter
+order. Single-file sessions work too. It also recognizes modern `GH01####`
+and `GX01####` naming, with case-insensitive filenames. Sessions are sorted by
+their base filename; unrelated files and subdirectories are ignored.
+Missing first/intermediate chapters and duplicate chapter numbers cause an
+error rather than a partial script. A missing final chapter cannot be detected
+from filenames alone. Use a folder from one camera/day to avoid recording-number
+collisions; the utility groups by filename, without inspecting video metadata.
+
+Copy [racevideo.defaults.example](racevideo.defaults.example) to your defaults
+file and edit it for your camera:
+
+```text
+imu_axis_order=ZXY
+duration_seconds=100
+video_encoder=nvidia
+speed_unit=kmh,mph
+```
+
+The defaults file is UTF-8. Each line is `flag=value`; leading `--` is optional. Blank lines and full-line
+`#` comments are allowed. Values can optionally be enclosed in matching single
+or double quotes; they are literal strings, without shell expansion or escape
+processing. Defaults retain their file order. `input`, `input_list`, and
+`output_video` are generated and must not appear in the defaults file.
+`imu_axis_order` is required. Other flags are passed through for RaceVideo to
+validate. Remove `duration_seconds` to render each complete session.
+
+Build with the normal CMake build, or just build the utility target:
+
+```sh
+cmake --build --preset release --target racevideo_commands
+```
+
+On Linux (also macOS), generate a Bash script:
+
+```sh
+./build/release/racevideo_commands --folder="/videos/track day" \
+  --defaults="racevideo.defaults.example" --output-prefix="/videos/rendered/overlay-" \
+  --racevideo="./bin/linux-x86_64/racevideo" > sessions.sh
+bash sessions.sh
+```
+
+On Windows, generate a PowerShell script:
+
+```powershell
+.\build\release\racevideo_commands.exe --folder="D:\Videos\Track day" `
+  --defaults="racevideo.defaults.example" --output-prefix="D:\Rendered\overlay-" `
+  --racevideo=".\build\release\racevideo.exe" |
+  Set-Content -Encoding utf8 sessions.ps1
+.\sessions.ps1
+```
+
+Review the generated script before executing it. Output contains absolute input
+paths, shell-quoted arguments, and multiline continuations (`\` for Bash, backtick
+for PowerShell). Each script stops if RaceVideo fails. The utility itself only
+generates text; it does not render videos or create output directories.
+Create the output directory before running the script. RaceVideo refuses to
+overwrite existing videos.
+
+`--output-prefix` is concatenated with each session's base filename and `.mp4`;
+it defaults to `overlay-`. For example, session 9595 produces
+`overlay-GOPR9595.mp4`. A prefix can include an output directory. Relative
+prefixes and executable paths resolve from the directory where you run the
+generated script. Without `--racevideo`, the script invokes `racevideo` on Unix
+or `racevideo.exe` on Windows through `PATH`.
+
+`--platform=windows`, `--platform=linux`, or `--platform=macos` overrides the
+host default (`--platform=auto`). Windows selects PowerShell rather than CMD;
+Linux/macOS select Bash. This overrides shell syntax, not the filesystem paths;
+cross-machine use requires paths accessible on the destination machine.
+Errors go to stderr and scripts go to stdout, so redirection captures only the
+script. Check the utility's exit status before executing the generated file.
+
 ## Privacy
 
 GoPro metadata can contain precise GPS locations, timestamps, device details,

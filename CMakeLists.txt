@@ -132,6 +132,13 @@ target_link_libraries(
 add_executable(racevideo_overlay_benchmark tools/overlay_benchmark.cc)
 target_link_libraries(racevideo_overlay_benchmark PRIVATE racevideo_core racevideo_options)
 
+add_library(racevideo_session_commands tools/session_commands.cc)
+target_include_directories(racevideo_session_commands PUBLIC tools)
+target_link_libraries(racevideo_session_commands PUBLIC racevideo_options
+  absl::statusor absl::strings)
+add_executable(racevideo_commands tools/session_commands_main.cc)
+target_link_libraries(racevideo_commands PRIVATE racevideo_session_commands)
+
 if(RACEVIDEO_BUILD_TESTS)
   include(CTest)
   find_package(GTest CONFIG REQUIRED)
@@ -156,6 +163,11 @@ if(RACEVIDEO_BUILD_TESTS)
     PRIVATE racevideo_core racevideo_options GTest::gtest_main)
 
   include(GoogleTest)
+  add_executable(racevideo_commands_tests tests/session_commands_test.cc)
+  target_link_libraries(racevideo_commands_tests PRIVATE
+    racevideo_session_commands GTest::gtest_main)
+  gtest_discover_tests(racevideo_commands_tests DISCOVERY_MODE PRE_TEST
+    PROPERTIES TIMEOUT 60)
   add_executable(racevideo_process_helper tests/process_helper.cc)
   target_link_libraries(racevideo_process_helper
     PRIVATE racevideo_options Threads::Threads)

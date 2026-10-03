@@ -1,0 +1,5 @@
+# Copy this file and choose the settings for your camera and encoder.
+imu_axis_order=ZXY
+duration_seconds=100
+video_encoder=nvidia
+speed_unit=kmh,mph

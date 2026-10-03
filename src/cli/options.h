@@ -28,6 +28,7 @@ struct Options {
   int render_width = 1920;
   int render_height = 1080;
   int output_width = 0;
+  int overlay_workers = 0;
   VideoEncoder video_encoder = VideoEncoder::kSoftware;
   VideoPipeline video_pipeline = VideoPipeline::kSoftware;
   std::filesystem::path vaapi_device = "/dev/dri/renderD128";

@@ -1,9 +1,11 @@
 #ifndef RACEVIDEO_RENDERER_DEBUG_RENDERER_H_
 #define RACEVIDEO_RENDERER_DEBUG_RENDERER_H_
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <span>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -37,6 +39,7 @@ struct TrackRenderState {
   std::size_t explored_point_count = 0;
   std::vector<TrackPixelPoint> points;
   std::vector<std::uint8_t> pixels;
+  std::shared_ptr<const std::vector<std::uint8_t>> snapshot;
 };
 
 struct TrackFrameSnapshot {
@@ -46,13 +49,39 @@ struct TrackFrameSnapshot {
   int arrow_x;
   int arrow_y;
   bool has_arrow;
-  std::vector<std::uint8_t> pixels;
+  std::shared_ptr<const std::vector<std::uint8_t>> pixels;
+};
+
+struct OverlayRenderTiming {
+  double buffer_seconds = 0;
+  double track_seconds = 0;
+  double widget_seconds = 0;
+};
+
+// Owns a reusable output buffer and caches. The returned pixels remain valid
+// until the next Render call. Use a separate instance for each in-flight frame.
+class CachedOverlayRenderer {
+ public:
+  CachedOverlayRenderer(int width, int height,
+                        std::vector<SpeedUnit> speed_units);
+  ~CachedOverlayRenderer();
+  CachedOverlayRenderer(const CachedOverlayRenderer&) = delete;
+  CachedOverlayRenderer& operator=(const CachedOverlayRenderer&) = delete;
+  absl::Status Render(const OverlayFrameData& frame,
+                      const TrackFrameSnapshot& track);
+  std::span<const std::uint8_t> pixels() const;
+  const OverlayRenderTiming& timing() const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 absl::StatusOr<TrackRenderState> CreateTrackRenderState(
     const OverlayData& overlay, int frame_width, int frame_height);
 absl::StatusOr<TrackFrameSnapshot> AdvanceTrackRenderState(
-    std::size_t explored_point_count, TrackRenderState* state);
+    std::size_t explored_point_count, TrackRenderState* state,
+    bool reuse_snapshot = true);
 
 absl::Status RenderDebugFrames(const TelemetryData& telemetry,
                                const OverlayData& overlay,

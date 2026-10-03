@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
@@ -91,14 +92,16 @@ absl::StatusOr<std::filesystem::path> WriteConcatManifest(
 struct RenderedFrameSlot {
   bool ready = false;
   absl::Status status = absl::OkStatus();
-  std::vector<std::uint8_t> pixels;
+  std::unique_ptr<CachedOverlayRenderer> renderer;
+  std::vector<std::uint8_t> reference_pixels;
 };
 
 absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
                                   const OverlayData& overlay,
                                   const VideoInfo& video,
                                   const VideoEncodeOptions& options,
-                                  int frame_count, const ByteSink& sink) {
+                                  int frame_count, const ByteSink& sink,
+                                  bool use_cache) {
   const auto track_setup_start = std::chrono::steady_clock::now();
   absl::StatusOr<TrackRenderState> track_state =
       CreateTrackRenderState(overlay, video.width, video.height);
@@ -106,21 +109,40 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
   const double track_setup_seconds = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - track_setup_start).count();
   std::atomic<std::int64_t> track_update_nanoseconds{0};
+  std::atomic<std::int64_t> sample_nanoseconds{0};
   std::atomic<std::int64_t> frame_render_nanoseconds{0};
+  std::atomic<std::int64_t> buffer_nanoseconds{0};
+  std::atomic<std::int64_t> track_copy_nanoseconds{0};
+  std::atomic<std::int64_t> widget_nanoseconds{0};
   std::int64_t pipe_write_nanoseconds = 0;
   const unsigned available_threads = std::thread::hardware_concurrency();
-  const unsigned requested_workers = std::max(
-      1u, std::min(12u, available_threads == 0 ? 4u : available_threads / 2));
+  const unsigned requested_workers =
+      options.overlay_workers > 0
+          ? static_cast<unsigned>(std::min(12, options.overlay_workers))
+          : std::max(1u, std::min(12u, available_threads == 0
+                                           ? 4u
+                                           : available_threads / 2));
   constexpr std::size_t kFrameMemoryBudget = 256u * 1024u * 1024u;
   const std::size_t frame_bytes =
       static_cast<std::size_t>(video.width) * video.height * 4;
+  // Reserve another frame's worth per worker for track snapshots and widget
+  // caches. Always permit one worker for large supported resolutions.
   const int memory_limited_workers = static_cast<int>(
-      std::max<std::size_t>(1, kFrameMemoryBudget / frame_bytes));
+      std::max<std::size_t>(1, kFrameMemoryBudget / (frame_bytes * 2)));
   const int worker_count =
       std::max(1, std::min({frame_count, static_cast<int>(requested_workers),
                             memory_limited_workers}));
   const int capacity = worker_count;
   std::vector<RenderedFrameSlot> slots(static_cast<std::size_t>(capacity));
+  for (auto& slot : slots) {
+    slot.renderer = std::make_unique<CachedOverlayRenderer>(
+        video.width, video.height, options.speed_units);
+  }
+  std::cout << "Overlay workers: " << worker_count
+            << ", RGBA bytes/frame: " << frame_bytes << ", planned pipe GiB: "
+            << static_cast<double>(frame_bytes) * frame_count /
+                   (1024.0 * 1024 * 1024)
+            << '\n';
   std::mutex mutex;
   std::condition_variable state_changed;
   int next_to_assign = 0;
@@ -146,13 +168,18 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
             options.start_seconds + frame_index / video.frames_per_second;
         absl::StatusOr<OverlayFrameData> sampled = SampleOverlayFrame(
             telemetry, overlay, absl::Seconds(timestamp));
+        const auto sampled_at = std::chrono::steady_clock::now();
+        sample_nanoseconds.fetch_add(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                sampled_at - track_update_start)
+                .count(),
+            std::memory_order_relaxed);
         if (!sampled.ok()) {
           preparation_status = sampled.status();
         } else {
           frame_data = *sampled;
-          absl::StatusOr<TrackFrameSnapshot> snapshot =
-              AdvanceTrackRenderState(frame_data.explored_track_point_count,
-                                      &*track_state);
+          absl::StatusOr<TrackFrameSnapshot> snapshot = AdvanceTrackRenderState(
+              frame_data.explored_track_point_count, &*track_state, use_cache);
           if (!snapshot.ok()) {
             preparation_status = snapshot.status();
           } else {
@@ -161,32 +188,44 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
         }
         track_update_nanoseconds.fetch_add(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - track_update_start)
+                std::chrono::steady_clock::now() - sampled_at)
                 .count(),
             std::memory_order_relaxed);
       }
 
-      absl::StatusOr<std::vector<std::uint8_t>> pixels =
-          absl::UnknownError("overlay frame was not rendered");
+      absl::Status render_status = preparation_status;
       if (preparation_status.ok()) {
         const auto frame_render_start = std::chrono::steady_clock::now();
-        pixels = RenderOverlayFrameRgba(frame_data, track_snapshot, video.width,
-                                        video.height, options.speed_units);
+        auto& slot = slots[static_cast<std::size_t>(frame_index % capacity)];
+        auto& renderer = *slot.renderer;
+        if (use_cache) {
+          render_status = renderer.Render(frame_data, track_snapshot);
+        } else {
+          auto rendered =
+              RenderOverlayFrameRgba(frame_data, track_snapshot, video.width,
+                                     video.height, options.speed_units);
+          render_status = rendered.status();
+          if (rendered.ok()) slot.reference_pixels = std::move(*rendered);
+        }
+        const auto& timing = renderer.timing();
+        buffer_nanoseconds.fetch_add(
+            static_cast<std::int64_t>(timing.buffer_seconds * 1e9));
+        track_copy_nanoseconds.fetch_add(
+            static_cast<std::int64_t>(timing.track_seconds * 1e9));
+        widget_nanoseconds.fetch_add(
+            static_cast<std::int64_t>(timing.widget_seconds * 1e9));
         frame_render_nanoseconds.fetch_add(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - frame_render_start)
                 .count(),
             std::memory_order_relaxed);
-      } else {
-        pixels = preparation_status;
       }
 
       {
         std::lock_guard lock(mutex);
         RenderedFrameSlot& slot =
             slots[static_cast<std::size_t>(frame_index % capacity)];
-        slot.status = pixels.status();
-        if (pixels.ok()) slot.pixels = std::move(*pixels);
+        slot.status = render_status;
         slot.ready = true;
       }
       state_changed.notify_all();
@@ -203,7 +242,7 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
   std::cout << "Encoding progress:   0%\r" << std::flush;
   absl::Status result = absl::OkStatus();
   while (next_to_write < frame_count) {
-    std::vector<std::uint8_t> pixels;
+    std::span<const std::uint8_t> pixels;
     {
       std::unique_lock lock(mutex);
       RenderedFrameSlot& slot =
@@ -213,9 +252,9 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
         result = slot.status;
         stop = true;
       } else {
-        pixels = std::move(slot.pixels);
-        slot.ready = false;
-        ++next_to_write;
+        pixels = use_cache
+                     ? slot.renderer->pixels()
+                     : std::span<const std::uint8_t>(slot.reference_pixels);
       }
     }
     state_changed.notify_all();
@@ -234,6 +273,14 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
       state_changed.notify_all();
       break;
     }
+    // The writer owns this slot until the synchronous pipe write completes.
+    // Only then may a worker render another frame into its persistent buffer.
+    {
+      std::lock_guard lock(mutex);
+      slots[static_cast<std::size_t>(next_to_write % capacity)].ready = false;
+      ++next_to_write;
+    }
+    state_changed.notify_all();
     const auto now = std::chrono::steady_clock::now();
     if (next_to_write == frame_count ||
         now - last_progress_report >= std::chrono::seconds(1)) {
@@ -241,14 +288,15 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
       const int percentage =
           std::min(100, next_to_write * 100 / frame_count);
       std::cout << "Encoding progress: " << std::setw(3) << percentage
-                << "% | overlay CPU " << std::fixed << std::setprecision(1)
+                << "% | render worker time " << std::fixed
+                << std::setprecision(1)
                 << frame_render_nanoseconds.load(std::memory_order_relaxed) /
                        1e9
                 << " s | track "
                 << track_update_nanoseconds.load(std::memory_order_relaxed) /
                        1e9
-                << " s | FFmpeg wait " << pipe_write_nanoseconds / 1e9
-                << " s\r" << std::defaultfloat << std::flush;
+                << " s | FFmpeg wait " << pipe_write_nanoseconds / 1e9 << " s\r"
+                << std::defaultfloat << std::flush;
     }
   }
 
@@ -267,10 +315,35 @@ absl::Status ProduceOverlayFrames(const TelemetryData& telemetry,
             << " cumulative worker-s, FFmpeg pipe/wait "
             << pipe_write_nanoseconds / 1e9 << " s.\n"
             << std::defaultfloat;
+  if (use_cache)
+    std::cout << "Render breakdown (summed worker seconds): buffer/setup "
+              << buffer_nanoseconds.load() / 1e9 << ", track copy/arrow "
+              << track_copy_nanoseconds.load() / 1e9 << ", widgets "
+              << widget_nanoseconds.load() / 1e9 << '\n';
+  std::cout << "Telemetry sampling: " << sample_nanoseconds.load() / 1e9
+            << " s.\n";
+  std::cout << std::setprecision(6);
   return result;
 }
 
 }  // namespace
+
+absl::Status RenderOverlayFrames(const TelemetryData& telemetry,
+                                 const OverlayData& overlay,
+                                 const VideoInfo& video,
+                                 const VideoEncodeOptions& options,
+                                 int frame_count, const ByteSink& sink,
+                                 bool use_cache) {
+  if (frame_count < 1 || video.width < 160 || video.width > 7680 ||
+      video.height < 90 || video.height > 4320 ||
+      !std::isfinite(video.frames_per_second) || video.frames_per_second <= 0 ||
+      !std::isfinite(options.start_seconds) || options.overlay_workers < 0 ||
+      options.overlay_workers > 12) {
+    return absl::InvalidArgumentError("invalid overlay stream configuration");
+  }
+  return ProduceOverlayFrames(telemetry, overlay, video, options, frame_count,
+                              sink, use_cache);
+}
 
 absl::StatusOr<VideoDimensions> DetermineOutputDimensions(
     const VideoInfo& video, int output_width) {
@@ -476,9 +549,14 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
 
   const int frame_count = static_cast<int>(
       std::ceil(options.duration_seconds * video.frames_per_second));
+  const auto submission_start = std::chrono::steady_clock::now();
+  auto submission_end = submission_start;
   const InputProducer producer = [&](const ByteSink& sink) -> absl::Status {
-    return ProduceOverlayFrames(telemetry, overlay, output_video, options,
-                                frame_count, sink);
+    const absl::Status status = RenderOverlayFrames(
+        telemetry, overlay, output_video, options, frame_count, sink);
+    submission_end = std::chrono::steady_clock::now();
+    if (status.ok()) std::cout << "Finalizing video...\n" << std::flush;
+    return status;
   };
   absl::StatusOr<ProcessResult> process =
       RunProcessWithInput(*ffmpeg, arguments, producer);
@@ -492,6 +570,14 @@ absl::Status EncodeOverlayVideo(const TelemetryData& telemetry,
         "ffmpeg failed with exit code ", process->exit_code,
         process->output.empty() ? "" : ": ", process->output));
   }
+  std::cout << "Frame submission elapsed: "
+            << std::chrono::duration<double>(submission_end - submission_start)
+                   .count()
+            << " s; FFmpeg finalization: "
+            << std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                             submission_end)
+                   .count()
+            << " s.\n";
   return absl::OkStatus();
 }
 

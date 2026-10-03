@@ -13,6 +13,15 @@
 namespace racevideo {
 namespace {
 
+std::string VaapiTestDevice() {
+#ifdef _WIN32
+  return {};  // VA-API is Linux-only; do not query its environment on Windows.
+#else
+  const char* device = std::getenv("RACEVIDEO_TEST_VAAPI_DEVICE");
+  return device == nullptr ? "" : device;
+#endif
+}
+
 std::string Utf8(const std::filesystem::path& path) {
   const auto value = path.u8string();
   return {reinterpret_cast<const char*>(value.data()), value.size()};
@@ -21,6 +30,7 @@ std::string Utf8(const std::filesystem::path& path) {
 struct VideoEncodeCase {
   bool multiple_chapters;
   VideoEncoder encoder;
+  int output_width = 160;
 };
 
 class VideoIntegrationTest : public testing::TestWithParam<VideoEncodeCase> {
@@ -44,8 +54,7 @@ class VideoIntegrationTest : public testing::TestWithParam<VideoEncodeCase> {
 
 TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
   const VideoEncodeCase test_case = GetParam();
-  if (test_case.encoder == VideoEncoder::kVaapi &&
-      std::getenv("RACEVIDEO_TEST_VAAPI_DEVICE") == nullptr) {
+  if (test_case.encoder == VideoEncoder::kVaapi && VaapiTestDevice().empty()) {
     GTEST_SKIP() << "Set RACEVIDEO_TEST_VAAPI_DEVICE to enable GPU tests";
   }
   const auto ffmpeg = FindExecutableOnPath("ffmpeg");
@@ -62,7 +71,7 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
       {"-hide_banner", "-loglevel",
        "error",        "-nostdin",
        "-f",           "lavfi",
-       "-i",           "testsrc2=size=320x180:rate=10:duration=1",
+       "-i",           "testsrc2=size=640x360:rate=10:duration=1",
        "-f",           "lavfi",
        "-i",           "sine=frequency=440:sample_rate=48000:duration=1",
        "-c:v",         "libx264",
@@ -100,19 +109,19 @@ TEST_P(VideoIntegrationTest, EncodesOverlayWithAudioAndLiteralChapterPaths) {
       .output_path = directory_ / "overlay result.mp4",
       .start_seconds = test_case.multiple_chapters ? 0.5 : 0.0,
       .duration_seconds = 1.0,
-      .output_width = 160,
+      .output_width = test_case.output_width,
       .video_encoder = test_case.encoder,
       .video_pipeline = VideoPipeline::kSoftware,
       .vaapi_device = test_case.encoder == VideoEncoder::kVaapi
-                          ? std::getenv("RACEVIDEO_TEST_VAAPI_DEVICE")
+                          ? VaapiTestDevice()
                           : "/dev/dri/renderD128",
       .speed_units = {SpeedUnit::kKilometersPerHour}};
   const auto status = EncodeOverlayVideo(telemetry, *overlay, *video, options);
   ASSERT_TRUE(status.ok()) << status;
   const auto result = ProbeVideo(options.output_path);
   ASSERT_TRUE(result.ok()) << result.status();
-  EXPECT_EQ(result->width, 160);
-  EXPECT_EQ(result->height, 90);
+  EXPECT_EQ(result->width, test_case.output_width);
+  EXPECT_EQ(result->height, test_case.output_width * 9 / 16);
   EXPECT_EQ(result->video_codec, "h264");
   EXPECT_EQ(result->audio_codec, "aac");
   EXPECT_TRUE(result->has_audio);
@@ -146,8 +155,10 @@ TEST(VideoEncoderValidationTest, RejectsRelativeVaapiDeviceBeforeEncoding) {
 INSTANTIATE_TEST_SUITE_P(
     Software, VideoIntegrationTest,
     testing::Values(VideoEncodeCase{false, VideoEncoder::kSoftware},
-                    VideoEncodeCase{true, VideoEncoder::kSoftware}),
+                    VideoEncodeCase{true, VideoEncoder::kSoftware},
+                    VideoEncodeCase{false, VideoEncoder::kSoftware, 640}),
     [](const testing::TestParamInfo<VideoEncodeCase>& info) {
+      if (info.param.output_width == 640) return "CachedLayout";
       return info.param.multiple_chapters ? "MultipleChapters"
                                           : "SingleChapter";
     });

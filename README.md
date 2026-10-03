@@ -392,6 +392,41 @@ beginning for every frame. After a successful run RaceVideo prints elapsed
 wall-clock time as both total seconds and minutes plus seconds, making preview
 and encoder performance easy to compare.
 
+Overlay rendering reuses frame buffers, caches gauge artwork and unchanged
+readouts, and shares immutable track images between frames when the explored
+route has not changed. Small layouts with overlapping widgets use the reference
+drawing order to preserve transparency. Debug PNG output uses the same cache.
+
+Use `--overlay_workers=1` to compare sequential rendering with the worker pool,
+or choose a value up to 12. The default, `0`, selects automatically from the
+available CPU threads and a memory allowance for frame buffers and caches.
+The selected worker count and RGBA bytes per frame are printed at startup.
+Rendering timers are summed elapsed durations across workers, not CPU usage;
+they overlap FFmpeg processing and must not be added to the total elapsed time.
+The detailed breakdown reports buffer/setup, track copy/arrow, and widget work.
+Telemetry sampling and track snapshot preparation are reported separately.
+Frame submission and FFmpeg finalization have separate wall-clock timers.
+
+To benchmark overlay generation without FFmpeg, disk, or pipe throughput, build
+and run `racevideo_overlay_benchmark`. It uses a deterministic 30 fps synthetic
+route, 10 Hz navigation, changing G-force, and both speed units. Arguments are
+width, height, frame count, worker count, and `reference` or `cached`:
+
+```powershell
+.\build\release\racevideo_overlay_benchmark.exe 1920 1080 900 1 reference
+.\build\release\racevideo_overlay_benchmark.exe 1920 1080 900 1 cached
+.\build\release\racevideo_overlay_benchmark.exe 1920 1080 900 4 cached
+```
+
+On Linux/macOS, use `./build/release/racevideo_overlay_benchmark` with the same
+arguments. Use the same Release build revision and arguments on both machines;
+repeat runs and compare medians. The reference mode performs the original
+per-frame allocation, drawing, and track snapshot copy using the same ordered
+worker queue. The sink samples one byte per memory page for a checksum; it does
+not simulate the full FFmpeg transfer. Compare checksums as a quick consistency
+check, not a substitute for the renderer's full pixel-comparison tests.
+These results measure renderer throughput, not end-to-end video encoding speed.
+
 RaceVideo also looks across the complete recording for stationary periods and
 uses quiet accelerometer and gyroscope samples to correct small camera pitch
 and roll mounting errors. It prints the applied angles when calibration is

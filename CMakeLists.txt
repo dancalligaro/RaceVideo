@@ -116,6 +116,9 @@ target_link_libraries(
   PRIVATE racevideo_core racevideo_options absl::flags_parse absl::log
           absl::log_initialize absl::status)
 
+add_executable(racevideo_overlay_benchmark tools/overlay_benchmark.cc)
+target_link_libraries(racevideo_overlay_benchmark PRIVATE racevideo_core racevideo_options)
+
 if(RACEVIDEO_BUILD_TESTS)
   include(CTest)
   find_package(GTest CONFIG REQUIRED)

@@ -11,10 +11,140 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "ffmpeg/video_encoder.h"
 #include "gtest/gtest.h"
 
 namespace racevideo {
 namespace {
+
+TEST(OverlayStreamTest, KeepsFramesOrderedAndBuffersOwnedUntilSinkReturns) {
+  OverlayData overlay;
+  overlay.track = {{.timestamp = absl::Seconds(0), .x = 0.15, .y = 0.15},
+                   {.timestamp = absl::Seconds(1), .x = 0.85, .y = 0.85}};
+  overlay.navigation = {{.timestamp = absl::Seconds(0),
+                         .speed_meters_per_second = 2,
+                         .heading_degrees = 0},
+                        {.timestamp = absl::Seconds(1),
+                         .speed_meters_per_second = 40,
+                         .heading_degrees = 170}};
+  TelemetryData telemetry;
+  telemetry.filtered_g_force = {
+      {.timestamp = absl::Seconds(0), .value = {}},
+      {.timestamp = absl::Seconds(1), .value = {.lateral_g = 1}}};
+  VideoInfo video{.width = 640, .height = 360, .frames_per_second = 30};
+  VideoEncodeOptions options{};
+  options.speed_units = {SpeedUnit::kKilometersPerHour,
+                         SpeedUnit::kMilesPerHour};
+  for (int workers : {1, 4}) {
+    options.overlay_workers = workers;
+    int received = 0;
+    const auto status = RenderOverlayFrames(
+        telemetry, overlay, video, options, 31,
+        [&](std::span<const std::uint8_t> actual) {
+          // Generating the reference while holding the sink deliberately lets
+          // the other workers run ahead and exercise slot reuse/backpressure.
+          auto reference = RenderOverlayFrameRgba(
+              telemetry, overlay, received / 30.0, video.width, video.height,
+              options.speed_units);
+          EXPECT_TRUE(reference.ok());
+          if (!reference.ok()) return reference.status();
+          EXPECT_TRUE(std::equal(actual.begin(), actual.end(),
+                                 reference->begin(), reference->end()))
+              << "workers " << workers << " frame " << received;
+          ++received;
+          return absl::OkStatus();
+        });
+    EXPECT_TRUE(status.ok()) << status;
+    EXPECT_EQ(received, 31);
+    int writes = 0;
+    const auto failed =
+        RenderOverlayFrames(telemetry, overlay, video, options, 31,
+                            [&](std::span<const std::uint8_t>) {
+                              ++writes;
+                              return absl::CancelledError("test sink closed");
+                            });
+    EXPECT_EQ(failed.code(), absl::StatusCode::kCancelled);
+    EXPECT_EQ(writes, 1);
+  }
+}
+
+TEST(CachedOverlayRendererTest, MatchesReferenceAcrossFrameChangesAndLayouts) {
+  OverlayData overlay;
+  // Crossing and repeated segments exercise accumulated alpha and track reuse.
+  for (const auto& point :
+       std::array<std::pair<double, double>, 6>{{{0.15, 0.2},
+                                                 {0.8, 0.8},
+                                                 {0.2, 0.8},
+                                                 {0.8, 0.2},
+                                                 {0.15, 0.2},
+                                                 {0.8, 0.8}}}) {
+    overlay.track.push_back({.timestamp = absl::Seconds(overlay.track.size()),
+                             .x = point.first,
+                             .y = point.second});
+  }
+  for (const auto& dimensions : std::array<std::pair<int, int>, 5>{
+           {{160, 90}, {320, 180}, {640, 360}, {1920, 1080}, {3840, 2160}}}) {
+    for (const auto& units : std::vector<std::vector<SpeedUnit>>{
+             {},
+             {SpeedUnit::kKilometersPerHour},
+             {SpeedUnit::kMilesPerHour, SpeedUnit::kKilometersPerHour}}) {
+      const auto [width, height] = dimensions;
+      CachedOverlayRenderer renderer(width, height, units);
+      auto track = CreateTrackRenderState(overlay, width, height);
+      ASSERT_TRUE(track.ok());
+      const std::array<double, 12> speeds = {0,    0, 2.5, 2.5, 27.7, 27.8,
+                                             1000, 1, 0,   0,   12,   12};
+      const std::uint8_t* buffer = nullptr;
+      for (std::size_t index = 0; index < speeds.size(); ++index) {
+        OverlayFrameData frame{
+            .speed_meters_per_second = speeds[index],
+            .heading_degrees = static_cast<double>(index) * 47,
+            .g_force = {.lateral_g = index % 2 == 0 ? 0.0 : 0.8,
+                        .longitudinal_g = index % 3 == 0 ? -0.3 : 0.1},
+            .explored_track_point_count = index / 2 + 1};
+        auto snapshot =
+            AdvanceTrackRenderState(frame.explored_track_point_count, &*track);
+        ASSERT_TRUE(snapshot.ok());
+        auto reference =
+            RenderOverlayFrameRgba(frame, *snapshot, width, height, units);
+        ASSERT_TRUE(reference.ok());
+        ASSERT_TRUE(renderer.Render(frame, *snapshot).ok());
+        const auto actual = renderer.pixels();
+        ASSERT_EQ(actual.size(), reference->size());
+        EXPECT_TRUE(
+            std::equal(actual.begin(), actual.end(), reference->begin()))
+            << width << 'x' << height << " frame " << index << " units "
+            << units.size();
+        if (buffer) EXPECT_EQ(actual.data(), buffer);
+        buffer = actual.data();
+        // Rendering the same frame twice must not accumulate translucent ink.
+        ASSERT_TRUE(renderer.Render(frame, *snapshot).ok());
+        EXPECT_TRUE(std::equal(renderer.pixels().begin(),
+                               renderer.pixels().end(), reference->begin()));
+      }
+    }
+  }
+}
+
+TEST(TrackRenderStateTest, ReusesUnchangedSnapshotsAndPreservesEarlierFrames) {
+  OverlayData overlay;
+  overlay.track = {{.timestamp = absl::Seconds(0), .x = 0.1, .y = 0.1},
+                   {.timestamp = absl::Seconds(1), .x = 0.9, .y = 0.9},
+                   {.timestamp = absl::Seconds(2), .x = 0.1, .y = 0.9}};
+  auto state = CreateTrackRenderState(overlay, 1920, 1080);
+  ASSERT_TRUE(state.ok());
+  auto first = AdvanceTrackRenderState(1, &*state);
+  ASSERT_TRUE(first.ok());
+  const auto saved = *first->pixels;
+  auto repeated = AdvanceTrackRenderState(1, &*state);
+  ASSERT_TRUE(repeated.ok());
+  EXPECT_EQ(first->pixels, repeated->pixels);
+  auto advanced = AdvanceTrackRenderState(3, &*state);
+  ASSERT_TRUE(advanced.ok());
+  EXPECT_NE(first->pixels, advanced->pixels);
+  EXPECT_EQ(*first->pixels, saved);
+  EXPECT_NE(*advanced->pixels, saved);
+}
 
 TEST(RenderDebugFramesTest, WritesRequestedPngFramesAndRefusesOverwrite) {
   TelemetryData telemetry;

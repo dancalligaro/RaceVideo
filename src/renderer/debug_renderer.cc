@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,28 @@ class Canvas {
   uint8_t* mutable_data() { return pixels_.data(); }
   std::vector<uint8_t> TakePixels() { return std::move(pixels_); }
 
+  void Clear(int x, int y, int width, int height) {
+    const int left = std::clamp(x, 0, width_);
+    const int right = std::clamp(x + width, 0, width_);
+    for (int row = std::max(0, y); row < std::min(height_, y + height); ++row) {
+      std::fill_n(
+          pixels_.data() + (static_cast<std::size_t>(row) * width_ + left) * 4,
+          static_cast<std::size_t>(std::max(0, right - left)) * 4, 0);
+    }
+  }
+
+  std::vector<uint8_t> CopyRegion(int x, int y, int width, int height,
+                                  std::vector<uint8_t> result = {}) const {
+    result.resize(static_cast<std::size_t>(width) * height * 4);
+    for (int row = 0; row < height; ++row) {
+      std::copy_n(
+          pixels_.data() + (static_cast<std::size_t>(y + row) * width_ + x) * 4,
+          static_cast<std::size_t>(width) * 4,
+          result.data() + static_cast<std::size_t>(row) * width * 4);
+    }
+    return result;
+  }
+
   void Blit(const std::vector<uint8_t>& source, int source_width,
             int source_height, int destination_x, int destination_y) {
     for (int y = 0; y < source_height; ++y) {
@@ -54,6 +77,21 @@ class Canvas {
       std::copy_n(source.data() + source_offset,
                   static_cast<std::size_t>(source_width) * 4,
                   pixels_.data() + destination_offset);
+    }
+  }
+
+  void RestoreTrack(const TrackFrameSnapshot& track, int x, int y, int radius) {
+    const int left = std::max(0, x - radius);
+    const int right = std::min(track.size, x + radius + 1);
+    for (int row = std::max(0, y - radius);
+         row < std::min(track.size, y + radius + 1); ++row) {
+      std::copy_n(track.pixels->data() +
+                      (static_cast<std::size_t>(row) * track.size + left) * 4,
+                  static_cast<std::size_t>(std::max(0, right - left)) * 4,
+                  pixels_.data() +
+                      (static_cast<std::size_t>(track.frame_y + row) * width_ +
+                       track.frame_x + left) *
+                          4);
     }
   }
 
@@ -315,8 +353,7 @@ std::string FormatGMagnitude(const GForceReading& value) {
   return output.str();
 }
 
-void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
-                int radius) {
+void DrawGForceBackground(Canvas& canvas, int cx, int cy, int radius) {
   canvas.Circle(cx, cy, radius, 9, kShadow);
   canvas.Circle(cx, cy, radius, 3, kWhite);
   constexpr double kMaximumDisplayedG = 1.2;
@@ -325,6 +362,11 @@ void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
   canvas.Circle(cx, cy, one_g_radius, 2, kGrid);
   canvas.Line(cx - radius, cy, cx + radius, cy, 1, kGrid);
   canvas.Line(cx, cy - radius, cx, cy + radius, 1, kGrid);
+}
+
+void DrawGForceDot(Canvas& canvas, const GForceReading& g, int cx, int cy,
+                   int radius) {
+  constexpr double kMaximumDisplayedG = 1.2;
   const double magnitude = std::hypot(g.lateral_g, g.longitudinal_g);
   const double displayed_magnitude = std::min(magnitude, kMaximumDisplayedG);
   const double position_scale =
@@ -339,8 +381,16 @@ void DrawGForce(Canvas& canvas, const GForceReading& g, int cx, int cy,
   canvas.Disc(dot_x, dot_y, std::max(8, radius / 10), kRed);
 }
 
+void DrawMagnitude(Canvas& canvas, std::string_view magnitude, int cx, int y,
+                   int scale) {
+  DrawOutlinedText(canvas, magnitude, cx - TextWidth(magnitude, scale) / 2, y,
+                   scale, kWhite);
+}
+
 void DrawReadouts(Canvas& canvas, const OverlayFrameData& frame,
-                  const std::vector<SpeedUnit>& speed_units) {
+                  const std::vector<SpeedUnit>& speed_units,
+                  bool draw_gauge = true, bool draw_speed = true,
+                  bool draw_background = true) {
   const int height = canvas.height();
   const int margin = std::max(16, height / 40);
   const int dial_radius = std::max(30, height * 4 / 55);
@@ -348,12 +398,17 @@ void DrawReadouts(Canvas& canvas, const OverlayFrameData& frame,
   const int magnitude_y = height - margin - 7 * label_scale;
   const int gauge_center_x = margin + dial_radius;
   const int gauge_center_y = magnitude_y - margin / 2 - dial_radius;
-  DrawGForce(canvas, frame.g_force, gauge_center_x, gauge_center_y,
-             dial_radius);
-  const std::string magnitude = FormatGMagnitude(frame.g_force);
-  DrawOutlinedText(canvas, magnitude,
-                   gauge_center_x - TextWidth(magnitude, label_scale) / 2,
-                   magnitude_y, label_scale, kWhite);
+  if (draw_gauge) {
+    if (draw_background) {
+      DrawGForceBackground(canvas, gauge_center_x, gauge_center_y, dial_radius);
+    }
+    DrawGForceDot(canvas, frame.g_force, gauge_center_x, gauge_center_y,
+                  dial_radius);
+    const std::string magnitude = FormatGMagnitude(frame.g_force);
+    DrawMagnitude(canvas, magnitude, gauge_center_x, magnitude_y, label_scale);
+  }
+
+  if (!draw_speed) return;
 
   const int digit_size = std::max(2, std::max(3, height / 90) * 7 / 10);
   const int unit_scale = std::max(1, digit_size / 2);
@@ -391,15 +446,14 @@ void WritePngBytes(void* context, void* data, int size) {
   if (!output->stream) output->failed = true;
 }
 
-absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
+absl::Status WritePng(const std::filesystem::path& path, int width, int height,
+                      std::span<const std::uint8_t> pixels) {
   WriteContext output{.stream = std::ofstream(path, std::ios::binary)};
   if (!output.stream) {
     return absl::UnknownError(absl::StrCat("cannot create ", path.string()));
   }
-  const int result = stbi_write_png_to_func(WritePngBytes, &output,
-                                             canvas.width(), canvas.height(),
-                                             4, canvas.data(),
-                                             canvas.width() * 4);
+  const int result = stbi_write_png_to_func(
+      WritePngBytes, &output, width, height, 4, pixels.data(), width * 4);
   output.stream.close();
   if (result == 0 || output.failed) {
     return absl::UnknownError(absl::StrCat("cannot write ", path.string()));
@@ -408,6 +462,174 @@ absl::Status WritePng(const std::filesystem::path& path, const Canvas& canvas) {
 }
 
 }  // namespace
+
+struct CachedOverlayRenderer::Impl {
+  int width;
+  int height;
+  std::vector<SpeedUnit> units;
+  std::vector<uint8_t> pixels;
+  std::vector<uint8_t> gauge_background;
+  std::vector<uint8_t> gauge_text_background;
+  std::vector<int> speeds;
+  std::string magnitude;
+  double lateral = 0;
+  double longitudinal = 0;
+  bool initialized = false;
+  TrackFrameSnapshot previous_track{};
+  OverlayRenderTiming timing;
+};
+
+CachedOverlayRenderer::CachedOverlayRenderer(int width, int height,
+                                             std::vector<SpeedUnit> speed_units)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->width = width;
+  impl_->height = height;
+  impl_->units = std::move(speed_units);
+}
+CachedOverlayRenderer::~CachedOverlayRenderer() = default;
+
+std::span<const std::uint8_t> CachedOverlayRenderer::pixels() const {
+  return impl_->pixels;
+}
+const OverlayRenderTiming& CachedOverlayRenderer::timing() const {
+  return impl_->timing;
+}
+
+absl::Status CachedOverlayRenderer::Render(const OverlayFrameData& frame,
+                                           const TrackFrameSnapshot& track) {
+  auto& state = *impl_;
+  const int width = state.width;
+  const int height = state.height;
+  if (width < 160 || height < 90 || width > 7680 || height > 4320 ||
+      track.size <= 0 || track.size > std::min(width, height) ||
+      track.frame_x < 0 || track.frame_y < 0 ||
+      track.frame_x > width - track.size ||
+      track.frame_y > height - track.size || !track.pixels ||
+      track.pixels->size() !=
+          static_cast<std::size_t>(track.size) * track.size * 4) {
+    return absl::InvalidArgumentError("invalid cached overlay dimensions");
+  }
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  if (state.pixels.empty()) {
+    state.pixels.resize(static_cast<std::size_t>(width) * height * 4, 0);
+  }
+  Canvas canvas(width, height, std::move(state.pixels));
+  const auto& previous = state.previous_track;
+  if (previous.frame_x != track.frame_x || previous.frame_y != track.frame_y ||
+      previous.size != track.size) {
+    canvas.Clear(0, 0, width, height);
+    state.initialized = false;
+  }
+  const int margin = std::max(16, height / 40);
+  const int radius = std::max(30, height * 4 / 55);
+  const int scale = std::max(1, height / 360);
+  const int magnitude_y = height - margin - 7 * scale;
+  const int cx = margin + radius;
+  const int cy = magnitude_y - margin / 2 - radius;
+  const int gauge_top = cy - radius - std::max(8, radius / 10) - 2;
+  const int left_width = std::min(width, 2 * (margin + radius) + 16);
+  const int digit_size = std::max(2, std::max(3, height / 90) * 7 / 10);
+  const int unit_scale = std::max(1, digit_size / 2);
+  const int speed_right = margin + 21 * digit_size +
+                          TextWidth("KMH", unit_scale) +
+                          std::max(2, unit_scale / 3) + 2;
+  const int speed_bottom = margin +
+                           static_cast<int>(state.units.size()) *
+                               (digit_size * 7 + std::max(9, digit_size * 2)) +
+                           digit_size;
+  const std::string magnitude = FormatGMagnitude(frame.g_force);
+  const int magnitude_half =
+      TextWidth(magnitude, scale) / 2 + std::max(2, scale / 3) + 2;
+  // Conservatively fall back when widget rectangles could overlap. This also
+  // preserves the original clipping and draw order on very small canvases.
+  const int arrow_radius = std::max(7, track.size / 22) + 2;
+  const bool separate =
+      gauge_top > 0 &&
+      (!track.has_arrow ||
+       (track.arrow_x >= arrow_radius && track.arrow_y >= arrow_radius &&
+        track.arrow_x + arrow_radius < track.size &&
+        track.arrow_y + arrow_radius < track.size)) &&
+      left_width <= track.frame_x && cx - magnitude_half >= 0 &&
+      cx + magnitude_half < left_width &&
+      (state.units.empty() ||
+       (speed_right <= track.frame_x && speed_bottom < gauge_top));
+  if (!separate) canvas.Clear(0, 0, width, height);
+  const auto buffer_end = Clock::now();
+  if (separate && state.initialized && previous.pixels == track.pixels) {
+    if (previous.has_arrow) {
+      canvas.RestoreTrack(track, previous.arrow_x, previous.arrow_y,
+                          arrow_radius);
+    }
+  } else {
+    canvas.Blit(*track.pixels, track.size, track.size, track.frame_x,
+                track.frame_y);
+  }
+  if (track.has_arrow) {
+    DrawArrow(canvas, track.frame_x + track.arrow_x,
+              track.frame_y + track.arrow_y, frame.heading_degrees, track.size);
+  }
+  const auto track_end = Clock::now();
+  if (!separate) {
+    DrawReadouts(canvas, frame, state.units);
+    state.initialized = false;
+    state.gauge_background.clear();
+    state.gauge_text_background.clear();
+  } else {
+    if (!state.initialized) {
+      canvas.Clear(0, 0, track.frame_x, height);
+      DrawGForceBackground(canvas, cx, cy, radius);
+      state.gauge_background =
+          canvas.CopyRegion(0, gauge_top, left_width, height - gauge_top);
+    }
+    if (!state.initialized || state.lateral != frame.g_force.lateral_g ||
+        state.longitudinal != frame.g_force.longitudinal_g ||
+        state.magnitude != magnitude) {
+      const bool text_below_dot = cy + radius + std::max(8, radius / 10) <
+                                  magnitude_y - std::max(2, scale / 3);
+      if (text_below_dot) {
+        if (!state.initialized || state.magnitude != magnitude) {
+          canvas.Blit(state.gauge_background, left_width, height - gauge_top, 0,
+                      gauge_top);
+          DrawMagnitude(canvas, magnitude, cx, magnitude_y, scale);
+          state.gauge_text_background =
+              canvas.CopyRegion(0, gauge_top, left_width, height - gauge_top,
+                                std::move(state.gauge_text_background));
+        }
+        canvas.Blit(state.gauge_text_background, left_width, height - gauge_top,
+                    0, gauge_top);
+        DrawGForceDot(canvas, frame.g_force, cx, cy, radius);
+      } else {
+        canvas.Blit(state.gauge_background, left_width, height - gauge_top, 0,
+                    gauge_top);
+        DrawReadouts(canvas, frame, state.units, true, false, false);
+      }
+    }
+    std::vector<int> speeds;
+    for (SpeedUnit unit : state.units) {
+      speeds.push_back(static_cast<int>(std::lround(std::clamp(
+          frame.speed_meters_per_second *
+              (unit == SpeedUnit::kMilesPerHour ? 2.2369362920544 : 3.6),
+          0.0, 999.0))));
+    }
+    if (!state.initialized || speeds != state.speeds) {
+      if (!state.units.empty()) canvas.Clear(0, 0, speed_right, speed_bottom);
+      DrawReadouts(canvas, frame, state.units, false, true);
+    }
+    state.speeds = std::move(speeds);
+    state.lateral = frame.g_force.lateral_g;
+    state.longitudinal = frame.g_force.longitudinal_g;
+    state.magnitude = magnitude;
+    state.initialized = true;
+  }
+  state.pixels = canvas.TakePixels();
+  state.previous_track = track;
+  const auto end = Clock::now();
+  state.timing = {std::chrono::duration<double>(buffer_end - start).count(),
+                  std::chrono::duration<double>(track_end - buffer_end).count(),
+                  std::chrono::duration<double>(end - track_end).count()};
+  return absl::OkStatus();
+}
 
 absl::StatusOr<TrackRenderState> CreateTrackRenderState(
     const OverlayData& overlay, int frame_width, int frame_height) {
@@ -454,13 +676,16 @@ absl::StatusOr<TrackRenderState> CreateTrackRenderState(
 }
 
 absl::StatusOr<TrackFrameSnapshot> AdvanceTrackRenderState(
-    std::size_t explored_point_count, TrackRenderState* state) {
+    std::size_t explored_point_count, TrackRenderState* state,
+    bool reuse_snapshot) {
   const std::size_t target =
       std::min(explored_point_count, state->points.size());
   if (target < state->explored_point_count) {
     return absl::InvalidArgumentError(
         "track render timestamps must be processed in increasing order");
   }
+  const bool changed =
+      target > std::max<std::size_t>(1, state->explored_point_count);
   Canvas canvas(state->size, state->size, std::move(state->pixels));
   for (std::size_t i = std::max<std::size_t>(1, state->explored_point_count);
        i < target; ++i) {
@@ -470,15 +695,18 @@ absl::StatusOr<TrackFrameSnapshot> AdvanceTrackRenderState(
   }
   state->explored_point_count = target;
   state->pixels = canvas.TakePixels();
+  if (changed || !state->snapshot || !reuse_snapshot) {
+    state->snapshot =
+        std::make_shared<const std::vector<std::uint8_t>>(state->pixels);
+  }
 
-  TrackFrameSnapshot snapshot{
-      .frame_x = state->frame_x,
-      .frame_y = state->frame_y,
-      .size = state->size,
-      .arrow_x = 0,
-      .arrow_y = 0,
-      .has_arrow = target > 0,
-      .pixels = state->pixels};
+  TrackFrameSnapshot snapshot{.frame_x = state->frame_x,
+                              .frame_y = state->frame_y,
+                              .size = state->size,
+                              .arrow_x = 0,
+                              .arrow_y = 0,
+                              .has_arrow = target > 0,
+                              .pixels = state->snapshot};
   if (target > 0) {
     snapshot.arrow_x = state->points[target - 1].x;
     snapshot.arrow_y = state->points[target - 1].y;
@@ -493,13 +721,14 @@ absl::StatusOr<std::vector<std::uint8_t>> RenderOverlayFrameRgba(
       static_cast<std::size_t>(track.size) * track.size * 4;
   if (width < 160 || height < 90 || width > 7680 || height > 4320 ||
       track.size <= 0 || track.frame_x < 0 || track.frame_y < 0 ||
-      track.frame_x + track.size > width || track.frame_y + track.size > height ||
-      track.pixels.size() != expected_track_bytes) {
+      track.frame_x + track.size > width ||
+      track.frame_y + track.size > height || !track.pixels ||
+      track.pixels->size() != expected_track_bytes) {
     return absl::InvalidArgumentError(
         "overlay frame or track snapshot dimensions are invalid");
   }
   Canvas canvas(width, height);
-  canvas.Blit(track.pixels, track.size, track.size, track.frame_x,
+  canvas.Blit(*track.pixels, track.size, track.size, track.frame_x,
               track.frame_y);
   if (track.has_arrow) {
     DrawArrow(canvas, track.frame_x + track.arrow_x,
@@ -548,6 +777,8 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
   absl::StatusOr<TrackRenderState> track =
       CreateTrackRenderState(overlay, options.width, options.height);
   if (!track.ok()) return track.status();
+  CachedOverlayRenderer renderer(options.width, options.height,
+                                 options.speed_units);
   for (int frame_index = 0; frame_index < frame_count; ++frame_index) {
     std::ostringstream name;
     name << "frame_" << std::setfill('0') << std::setw(6) << frame_index
@@ -566,14 +797,10 @@ absl::Status RenderDebugFrames(const TelemetryData& telemetry,
     absl::StatusOr<TrackFrameSnapshot> track_snapshot =
         AdvanceTrackRenderState(frame->explored_track_point_count, &*track);
     if (!track_snapshot.ok()) return track_snapshot.status();
-    absl::StatusOr<std::vector<std::uint8_t>> pixels =
-        RenderOverlayFrameRgba(*frame, *track_snapshot, options.width,
-                               options.height, options.speed_units);
-    if (!pixels.ok()) return pixels.status();
-    Canvas canvas(options.width, options.height);
-    std::copy(pixels->begin(), pixels->end(),
-              canvas.mutable_data());
-    const absl::Status status = WritePng(path, canvas);
+    const absl::Status rendered = renderer.Render(*frame, *track_snapshot);
+    if (!rendered.ok()) return rendered;
+    const absl::Status status =
+        WritePng(path, options.width, options.height, renderer.pixels());
     if (!status.ok()) return status;
   }
   return absl::OkStatus();

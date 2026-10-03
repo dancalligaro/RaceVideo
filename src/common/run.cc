@@ -240,17 +240,18 @@ absl::Status RunChapters(const Options& options,
       return absl::UnknownError(absl::StrCat(
           "cannot inspect output video path: ", error.message()));
     }
-    absl::Status status = EncodeOverlayVideo(
-        combined->telemetry, *overlay, combined->video,
-        {.chapters = combined->chapters,
-         .output_path = options.output_video_path,
-         .start_seconds = options.start_seconds,
-         .duration_seconds = actual_duration,
-         .output_width = options.output_width,
-         .video_encoder = options.video_encoder,
-         .video_pipeline = options.video_pipeline,
-         .vaapi_device = options.vaapi_device,
-         .speed_units = options.speed_units});
+    absl::Status status =
+        EncodeOverlayVideo(combined->telemetry, *overlay, combined->video,
+                           {.chapters = combined->chapters,
+                            .output_path = options.output_video_path,
+                            .start_seconds = options.start_seconds,
+                            .duration_seconds = actual_duration,
+                            .output_width = options.output_width,
+                            .video_encoder = options.video_encoder,
+                            .video_pipeline = options.video_pipeline,
+                            .vaapi_device = options.vaapi_device,
+                            .speed_units = options.speed_units,
+                            .overlay_workers = options.overlay_workers});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "
               << options.output_video_path.string() << '\n';
@@ -579,7 +580,8 @@ absl::Status Run(const Options& options) {
          .video_encoder = options.video_encoder,
          .video_pipeline = options.video_pipeline,
          .vaapi_device = options.vaapi_device,
-         .speed_units = options.speed_units});
+         .speed_units = options.speed_units,
+         .overlay_workers = options.overlay_workers});
     if (!status.ok()) return status;
     std::cout << "Overlay video written to: "
               << options.output_video_path.string() << '\n';

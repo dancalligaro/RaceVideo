@@ -39,6 +39,9 @@ ABSL_FLAG(double, duration_seconds, 0.0,
 ABSL_FLAG(double, render_fps, 30.0, "Debug overlay frame rate");
 ABSL_FLAG(int, render_width, 1920, "Debug overlay width in pixels");
 ABSL_FLAG(int, render_height, 1080, "Debug overlay height in pixels");
+ABSL_FLAG(int, overlay_workers, 0,
+          "Overlay workers: 0 selects automatically, 1 uses sequential "
+          "rendering, maximum 12");
 ABSL_FLAG(int, output_width, 0,
           "Output video width; zero preserves the source resolution");
 ABSL_FLAG(std::string, video_encoder, "software",
@@ -174,6 +177,10 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
   const int render_width = absl::GetFlag(FLAGS_render_width);
   const int render_height = absl::GetFlag(FLAGS_render_height);
   const int output_width = absl::GetFlag(FLAGS_output_width);
+  const int overlay_workers = absl::GetFlag(FLAGS_overlay_workers);
+  if (overlay_workers < 0 || overlay_workers > 12) {
+    return absl::InvalidArgumentError("--overlay_workers must be in [0, 12]");
+  }
   absl::StatusOr<VideoEncoder> video_encoder =
       ParseVideoEncoder(absl::GetFlag(FLAGS_video_encoder));
   if (!video_encoder.ok()) return video_encoder.status();
@@ -240,8 +247,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .inspect_video = absl::GetFlag(FLAGS_inspect_video),
                  .extract_gpmf_path = absl::GetFlag(FLAGS_extract_gpmf),
                  .export_json_path = absl::GetFlag(FLAGS_export_json),
-                 .export_telemetry_path =
-                     absl::GetFlag(FLAGS_export_telemetry),
+                 .export_telemetry_path = absl::GetFlag(FLAGS_export_telemetry),
                  .inspect_telemetry_path = inspect_telemetry,
                  .render_frames_path = render_frames,
                  .output_video_path = output_video,
@@ -252,6 +258,7 @@ absl::StatusOr<Options> ParseOptions(int argc, char* argv[]) {
                  .render_width = render_width,
                  .render_height = render_height,
                  .output_width = output_width,
+                 .overlay_workers = overlay_workers,
                  .video_encoder = *video_encoder,
                  .video_pipeline = *video_pipeline,
                  .vaapi_device = absl::GetFlag(FLAGS_vaapi_device),

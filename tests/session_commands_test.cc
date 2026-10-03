@@ -81,13 +81,19 @@ TEST_F(SessionCommandsTest, RejectsMissingFirstAndIntermediateChapters) {
   EXPECT_TRUE(GenerateSessionCommands(options_).ok());
 }
 
-#ifndef _WIN32
 TEST_F(SessionCommandsTest, RejectsDuplicateCaseInsensitiveChapters) {
   Touch("GOPR9595.MP4");
   Touch("gopr9595.mp4");
+  std::error_code error;
+  const bool same_file = std::filesystem::equivalent(
+      directory_ / "GOPR9595.MP4", directory_ / "gopr9595.mp4", error);
+  ASSERT_FALSE(error) << error.message();
+  if (same_file) {
+    GTEST_SKIP() << "Requires a filesystem that preserves distinct filenames "
+                    "differing only by case";
+  }
   EXPECT_FALSE(GenerateSessionCommands(options_).ok());
 }
-#endif
 
 TEST_F(SessionCommandsTest, ReadsBomCommentsCrLfAndQuotedValues) {
   Touch("GOPR9595.MP4");

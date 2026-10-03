@@ -1,6 +1,7 @@
 #include "session_commands.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -132,6 +133,58 @@ TEST_F(SessionCommandsTest, QuotesShellMetacharactersAndExecutable) {
 TEST_F(SessionCommandsTest, EmptyAndMissingFoldersReturnErrors) {
   EXPECT_FALSE(GenerateSessionCommands(options_).ok());
   options_.folder = directory_ / "missing";
+  EXPECT_FALSE(GenerateSessionCommands(options_).ok());
+}
+
+TEST_F(SessionCommandsTest, ReadsGeneratorDefaultsAndExpandsHome) {
+  Touch("GOPR9595.MP4");
+  options_.executable.clear();
+  WriteDefaults("racevideo=~/Racevideo/bin/linux/racevideo\n"
+                "output_prefix=\"~/racevideo_output/full-\"\n"
+                "imu_axis_order=ZXY\n");
+#ifdef _WIN32
+  const char* home = std::getenv("USERPROFILE");
+#else
+  const char* home = std::getenv("HOME");
+#endif
+  ASSERT_NE(home, nullptr);
+  const auto script = GenerateSessionCommands(options_);
+  ASSERT_TRUE(script.ok()) << script.status();
+  EXPECT_NE(script->find((std::filesystem::path(home) /
+                         "Racevideo/bin/linux/racevideo").string()),
+            std::string::npos);
+  EXPECT_NE(script->find("--output_video=" +
+                        (std::filesystem::path(home) /
+                         "racevideo_output/full-GOPR9595.mp4").string()),
+            std::string::npos);
+  EXPECT_EQ(script->find("--racevideo="), std::string::npos);
+  EXPECT_EQ(script->find("--output_prefix="), std::string::npos);
+  EXPECT_EQ(script->find('~'), std::string::npos);
+}
+
+TEST_F(SessionCommandsTest, CommandLineOverridesGeneratorDefaults) {
+  Touch("GOPR9595.MP4");
+  WriteDefaults("racevideo=default-binary\noutput_prefix=default-\n"
+                "imu_axis_order=ZXY\n");
+  options_.executable = "my tools/racevideo";
+  options_.output_prefix = "chosen-";
+  const auto script = GenerateSessionCommands(options_);
+  ASSERT_TRUE(script.ok()) << script.status();
+  EXPECT_NE(script->find("'my tools/racevideo'"), std::string::npos);
+  EXPECT_NE(script->find("--output_video=chosen-GOPR9595.mp4"), std::string::npos);
+  EXPECT_EQ(script->find("default-"), std::string::npos);
+  options_.output_prefix = "";
+  const auto no_prefix = GenerateSessionCommands(options_);
+  ASSERT_TRUE(no_prefix.ok()) << no_prefix.status();
+  EXPECT_NE(no_prefix->find("--output_video=GOPR9595.mp4"), std::string::npos);
+}
+
+TEST_F(SessionCommandsTest, RejectsEmptyExecutableAndUnsupportedHomeSyntax) {
+  Touch("GOPR9595.MP4");
+  options_.executable.clear();
+  WriteDefaults("racevideo=\nimu_axis_order=ZXY\n");
+  EXPECT_FALSE(GenerateSessionCommands(options_).ok());
+  WriteDefaults("racevideo=~someone/racevideo\nimu_axis_order=ZXY\n");
   EXPECT_FALSE(GenerateSessionCommands(options_).ok());
 }
 

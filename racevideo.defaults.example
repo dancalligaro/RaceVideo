@@ -1,4 +1,9 @@
 # Copy this file and choose the settings for your camera and encoder.
+# Generator settings (not passed as flags to RaceVideo).
+racevideo=~/Racevideo/bin/linux/racevideo
+output_prefix="~/racevideo_output/full-"
+
+# RaceVideo flags.
 imu_axis_order=ZXY
 duration_seconds=100
 video_encoder=nvidia

@@ -14,6 +14,8 @@ int main(int argc, char* argv[]) {
                  "  [--racevideo=EXECUTABLE]\n\n"
                  "Scan one folder and print one Bash/PowerShell command per session.\n"
                  "Defaults: flag=value, one per line; # comments and blank lines allowed.\n"
+                 "Defaults may also set racevideo and output_prefix; CLI values override them.\n"
+                 "Executable/prefix paths beginning with ~/ expand to the host home directory.\n"
                  "Output prefix defaults to overlay-; paths in it are relative to script execution.\n"
                  "Windows emits PowerShell; Linux/macOS emit Bash. Platform defaults to auto.\n"
                  "GoPro naming: GOPR####/GPnn####, GHnn####, GXnn#### (.MP4, case-insensitive).\n"

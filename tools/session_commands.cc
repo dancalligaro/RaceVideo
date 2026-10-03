@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <string_view>
@@ -116,12 +117,48 @@ std::string Quote(std::string_view value, bool powershell) {
   return result + "'";
 }
 
+absl::StatusOr<std::string> ExpandHome(std::string value) {
+  if (value.empty() || value.front() != '~') return value;
+  if (value.size() > 1 && value[1] != '/' && value[1] != '\\') {
+    return absl::InvalidArgumentError("home paths must use ~ or ~/; ~user is unsupported");
+  }
+#ifdef _WIN32
+  const char* home = std::getenv("USERPROFILE");
+#else
+  const char* home = std::getenv("HOME");
+#endif
+  if (home == nullptr || *home == '\0') {
+    return absl::InvalidArgumentError("cannot expand ~: home environment variable is unset");
+  }
+  if (value.size() == 1) return std::string(home);
+  return (std::filesystem::path(home) / value.substr(2)).string();
+}
+
 }  // namespace
 
 absl::StatusOr<std::string> GenerateSessionCommands(
     const SessionCommandOptions& options) {
   auto defaults = ReadDefaults(options.defaults);
   if (!defaults.ok()) return defaults.status();
+  std::string executable = options.powershell ? "racevideo.exe" : "racevideo";
+  std::string output_prefix = "overlay-";
+  Defaults flags;
+  for (const auto& [key, value] : *defaults) {
+    if (key == "racevideo") executable = value;
+    else if (key == "output_prefix") output_prefix = value;
+    else flags.emplace_back(key, value);
+  }
+  if (!options.executable.empty()) executable = options.executable;
+  if (options.output_prefix.has_value()) output_prefix = *options.output_prefix;
+  if (executable.empty()) {
+    return absl::InvalidArgumentError("racevideo executable path must not be empty");
+  }
+  auto expanded_executable = ExpandHome(executable);
+  if (!expanded_executable.ok()) return expanded_executable.status();
+  auto expanded_prefix = ExpandHome(output_prefix);
+  if (!expanded_prefix.ok()) return expanded_prefix.status();
+  executable = *expanded_executable;
+  output_prefix = *expanded_prefix;
   std::error_code error;
   const auto folder = std::filesystem::absolute(options.folder, error)
                           .lexically_normal();
@@ -147,10 +184,6 @@ absl::StatusOr<std::string> GenerateSessionCommands(
   }
   if (error) return absl::DataLossError("cannot read input folder");
   if (sessions.empty()) return absl::NotFoundError("no GoPro chapters found");
-  const std::string executable = options.executable.empty()
-                                     ? (options.powershell ? "racevideo.exe"
-                                                           : "racevideo")
-                                     : options.executable;
   std::string script = options.powershell ? "" : "#!/usr/bin/env bash\nset -e\n\n";
   const std::string continuation = options.powershell ? " `\n" : " \\\n";
   for (const auto& [session, contents] : sessions) {
@@ -164,8 +197,8 @@ absl::StatusOr<std::string> GenerateSessionCommands(
       }
       arguments.push_back("--input=" + path.string());
     }
-    arguments.push_back("--output_video=" + options.output_prefix + session + ".mp4");
-    for (const auto& [key, value] : *defaults) {
+    arguments.push_back("--output_video=" + output_prefix + session + ".mp4");
+    for (const auto& [key, value] : flags) {
       arguments.push_back("--" + key + "=" + value);
     }
     script += (options.powershell ? "& " : "") + Quote(executable, options.powershell);

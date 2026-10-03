@@ -504,6 +504,8 @@ Copy [racevideo.defaults.example](racevideo.defaults.example) to your defaults
 file and edit it for your camera:
 
 ```text
+racevideo=~/Racevideo/bin/linux/racevideo
+output_prefix="~/racevideo_output/full-"
 imu_axis_order=ZXY
 duration_seconds=100
 video_encoder=nvidia
@@ -517,6 +519,14 @@ processing. Defaults retain their file order. `input`, `input_list`, and
 `output_video` are generated and must not appear in the defaults file.
 `imu_axis_order` is required. Other flags are passed through for RaceVideo to
 validate. Remove `duration_seconds` to render each complete session.
+
+`racevideo` and `output_prefix` are generator settings rather than RaceVideo
+flags. They set the executable path and output filename prefix. `--racevideo`
+and `--output-prefix` on the command line override the corresponding defaults.
+Both settings expand a leading `~/` to the current host's home directory
+(`HOME` on Linux/macOS, `USERPROFILE` on Windows), before quoting the generated
+command. Other values remain literal. Adjust the example executable path to
+your installation; the repository's Linux binary is in `bin/linux-x86_64/`.
 
 Build with the normal CMake build, or just build the utility target:
 
@@ -554,7 +564,7 @@ overwrite existing videos.
 it defaults to `overlay-`. For example, session 9595 produces
 `overlay-GOPR9595.mp4`. A prefix can include an output directory. Relative
 prefixes and executable paths resolve from the directory where you run the
-generated script. Without `--racevideo`, the script invokes `racevideo` on Unix
+generated script. Without `--racevideo` or a `racevideo` default, the script invokes `racevideo` on Unix
 or `racevideo.exe` on Windows through `PATH`.
 
 `--platform=windows`, `--platform=linux`, or `--platform=macos` overrides the

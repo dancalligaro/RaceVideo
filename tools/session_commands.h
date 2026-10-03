@@ -2,6 +2,7 @@
 #define RACEVIDEO_TOOLS_SESSION_COMMANDS_H_
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include "absl/status/statusor.h"
@@ -11,7 +12,7 @@ namespace racevideo {
 struct SessionCommandOptions {
   std::filesystem::path folder;
   std::filesystem::path defaults;
-  std::string output_prefix = "overlay-";
+  std::optional<std::string> output_prefix;
   std::string executable;
   bool powershell = false;
 };
